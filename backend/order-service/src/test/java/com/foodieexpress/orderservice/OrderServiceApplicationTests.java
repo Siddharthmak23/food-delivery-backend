@@ -188,6 +188,26 @@ class OrderServiceApplicationTests {
     }
 
     @Test
+    void platformOrderListingIsAdminOnlyAndUsesBoundedPagination() throws Exception {
+        assertEquals(401, mockMvc.perform(get("/api/admin/orders")).andReturn().getResponse().getStatus());
+        assertEquals(403, mockMvc.perform(get("/api/admin/orders")
+                        .header("Authorization", "Bearer " + tokenWithRole("CUSTOMER")))
+                .andReturn().getResponse().getStatus());
+
+        MvcResult failed = mockMvc.perform(get("/api/admin/orders")
+                        .header("Authorization", "Bearer " + tokenWithRole("ADMIN")))
+                .andReturn();
+        assertEquals(503, failed.getResponse().getStatus());
+        assertTrue(failed.getResponse().getContentAsString().contains("\"code\":\"DEPENDENCY_UNAVAILABLE\""));
+
+        MvcResult invalidPage = mockMvc.perform(get("/api/admin/orders")
+                        .header("Authorization", "Bearer " + tokenWithRole("ADMIN"))
+                        .param("size", "101"))
+                .andReturn();
+        assertEquals(400, invalidPage.getResponse().getStatus());
+    }
+
+    @Test
     void hs256TokenAuthenticatesAndInvalidOrExpiredTokensAreRejected() throws Exception {
         String token = tokenWithExpiry(Instant.now().plusSeconds(300));
         MvcResult valid = mockMvc.perform(get("/api/future")
@@ -291,7 +311,7 @@ class OrderServiceApplicationTests {
                 .andRespond(withSuccess("""
                         {"restaurantId":"672000000000000000000001","items":[{
                           "id":"672000000000000000000010","restaurantId":"672000000000000000000001",
-                          "name":"Pasta","quantity":2,"price":"12.50","currency":"USD","available":true}]}
+                          "name":"Pasta","quantity":2,"price":"12.50","currency":"INR","available":true}]}
                         """, MediaType.APPLICATION_JSON));
         var quote = new HttpRestaurantQuoteClient(restaurantBuilder.build(), internalRestaurantTokenService)
                 .quote("672000000000000000000001", new RestaurantQuoteRequest(List.of(
@@ -354,7 +374,7 @@ class OrderServiceApplicationTests {
                 .andExpect(header("Authorization", org.hamcrest.Matchers.startsWith("Bearer ")))
                 .andRespond(withSuccess("""
                         {"id":"674000000000000000000001","orderId":"%s",
-                         "restaurantId":"%s","customerId":"%s","currency":"USD",
+                         "restaurantId":"%s","customerId":"%s","currency":"INR",
                          "status":"PENDING_ASSIGNMENT"}
                         """.formatted(orderId, restaurantId, customerId), MediaType.APPLICATION_JSON));
         var created = new HttpDeliveryProvisioningClient(
@@ -365,7 +385,7 @@ class OrderServiceApplicationTests {
                                 "Restaurant", "1 Main St", null, "City", "CA", "90000", "US", null),
                         new DeliveryCreateRequest.Address(
                                 "Customer", "2 Main St", null, "Mumbai", "Maharashtra", "400001", "IN", "+919876543210"),
-                        "USD"));
+                        "INR"));
         assertEquals(orderId, created.orderId());
         deliveryServer.verify();
 

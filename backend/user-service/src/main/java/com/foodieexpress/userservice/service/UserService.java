@@ -4,6 +4,7 @@ import com.foodieexpress.userservice.dto.LoginRequest;
 import com.foodieexpress.userservice.dto.RegisterRequest;
 import com.foodieexpress.userservice.dto.UpdateProfileRequest;
 import com.foodieexpress.userservice.exception.EmailAlreadyRegisteredException;
+import com.foodieexpress.userservice.exception.InvalidRequestException;
 import com.foodieexpress.userservice.exception.InvalidCredentialsException;
 import com.foodieexpress.userservice.exception.ResourceNotFoundException;
 import com.foodieexpress.userservice.model.User;
@@ -61,9 +62,13 @@ public class UserService {
     }
 
     public User updateProfile(String userId, UpdateProfileRequest request) {
+        if (!UpdateProfileRequest.isValidPhone(request.phone())) {
+            throw new InvalidRequestException(
+                    "Phone must be a valid Indian mobile number with 10 digits starting from 6 to 9, optionally prefixed by +91");
+        }
         User user = getActiveUser(userId);
         user.setDisplayName(request.displayName().trim());
-        user.setPhone(request.phone() == null || request.phone().isBlank() ? null : request.phone().trim());
+        user.setPhone(UpdateProfileRequest.normalizePhone(request.phone()));
         user.setUpdatedAt(Instant.now());
         return userRepository.save(user);
     }

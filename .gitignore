@@ -1,0 +1,37 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local build output
+target/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env.example
+
+# TypeScript build cache
+frontend/*.tsbuildinfo
+*.tsbuildinfo
+
+**/target/
+**/node_modules/
+.DS_Store
+
+
+# Environment and secrets
+**/application-local.properties
+**/application-secret.properties
+
+# Frontend
+**/dist/
+**/coverage/
+
+# IDE and OS
+.idea/
+.vscode/

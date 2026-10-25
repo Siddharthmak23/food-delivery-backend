@@ -6,6 +6,7 @@ import com.foodieexpress.restaurantservice.dto.MenuItemResponse;
 import com.foodieexpress.restaurantservice.dto.MenuQuoteRequest;
 import com.foodieexpress.restaurantservice.dto.MenuQuoteResponse;
 import com.foodieexpress.restaurantservice.dto.PageResponse;
+import com.foodieexpress.restaurantservice.dto.AdminRestaurantResponse;
 import com.foodieexpress.restaurantservice.dto.RestaurantApprovalRequest;
 import com.foodieexpress.restaurantservice.dto.RestaurantRequest;
 import com.foodieexpress.restaurantservice.dto.RestaurantOwnerVerificationResponse;
@@ -163,13 +164,13 @@ public class RestaurantController {
     }
 
     @GetMapping("/api/admin/restaurants")
-    public PageResponse<RestaurantResponse> listForAdmin(
+    public PageResponse<AdminRestaurantResponse> listForAdmin(
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
             @RequestParam(required = false) @Size(max = 32) String status,
             @RequestParam(defaultValue = "name,asc") String sort) {
         return restaurantService.listForAdmin(status, page, size, direction(sort))
-                .map(RestaurantResponse::from);
+                .map(AdminRestaurantResponse::from);
     }
 
     private Sort.Direction direction(String sort) {

@@ -56,6 +56,10 @@ export interface Restaurant {
   status: string;
 }
 
+export interface AdminRestaurant extends Restaurant {
+  ownerUserId: string;
+}
+
 export interface MenuItem {
   id: string;
   restaurantId: string;
@@ -97,6 +101,8 @@ export interface Order {
   updatedAt: string;
   statusUpdatedAt: string;
 }
+
+export type AdminOrder = Omit<Order, "deliveryAddress" | "cancellationReason" | "rejectionReason">;
 
 export interface DeliveryEvent {
   id: string;

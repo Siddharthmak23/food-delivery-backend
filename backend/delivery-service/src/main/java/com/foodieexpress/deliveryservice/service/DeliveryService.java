@@ -64,8 +64,8 @@ public class DeliveryService {
         }
         String restaurantId = normalizeId(request.restaurantId(), "Restaurant ID is invalid");
         String customerId = normalizeId(request.customerId(), "Customer ID is invalid");
-        if (!"USD".equals(request.currency())) {
-            throw new InvalidDeliveryException("Only USD deliveries are supported");
+        if (!"INR".equals(request.currency())) {
+            throw new InvalidDeliveryException("Only INR deliveries are supported");
         }
         DeliveryAddress pickup = pickupAddress(request.pickupAddress());
         DeliveryAddress dropoff = address(request.deliveryAddress());
@@ -292,7 +292,7 @@ public class DeliveryService {
                 || !existing.getCustomerId().equals(customerId)
                 || !existing.getPickupAddress().equals(pickup)
                 || !existing.getDeliveryAddress().equals(dropoff)
-                || !"USD".equals(existing.getCurrency())) {
+                || !"INR".equals(existing.getCurrency())) {
             throw new DeliveryConflictException("Order ID was already provisioned with a different payload");
         }
         return existing;

@@ -1,6 +1,8 @@
 import type {
   Address,
   AddressInput,
+  AdminOrder,
+  AdminRestaurant,
   ApiError,
   Delivery,
   LoginResult,
@@ -97,6 +99,8 @@ export function createApi(token: string | null, onUnauthorized: () => void) {
     login: (body: { email: string; password: string }) =>
       call<LoginResult>("user", "/api/auth/login", { method: "POST", body }),
     profile: () => call<User>("user", "/api/users/me"),
+    updateProfile: (body: { displayName: string; phone: string }) =>
+      call<User>("user", "/api/users/me", { method: "PUT", body }),
     listAddresses: () => call<Page<Address>>("user", "/api/users/me/addresses?page=0&size=100"),
     createAddress: (body: AddressInput) =>
       call<Address>("user", "/api/users/me/addresses", { method: "POST", body }),
@@ -119,6 +123,16 @@ export function createApi(token: string | null, onUnauthorized: () => void) {
       call<Restaurant>("restaurant", "/api/restaurants", { method: "POST", body }),
     updateRestaurant: (id: string, body: Omit<Restaurant, "id" | "status">) =>
       call<Restaurant>("restaurant", `/api/restaurants/${encodeURIComponent(id)}`, { method: "PUT", body }),
+    adminRestaurants: (status = "PENDING_APPROVAL", page = 0) =>
+      call<Page<AdminRestaurant>>(
+        "restaurant",
+        `/api/admin/restaurants?${query({ status, page, size: 20, sort: "name,asc" })}`,
+      ),
+    updateRestaurantApproval: (id: string, status: "ACTIVE" | "REJECTED") =>
+      call<AdminRestaurant>("restaurant", `/api/admin/restaurants/${encodeURIComponent(id)}/approval`, {
+        method: "PATCH",
+        body: { status },
+      }),
     createMenuItem: (id: string, body: Omit<MenuItem, "id" | "restaurantId">) =>
       call<MenuItem>("restaurant", `/api/restaurants/${encodeURIComponent(id)}/menu-items`, {
         method: "POST",
@@ -166,6 +180,8 @@ export function createApi(token: string | null, onUnauthorized: () => void) {
         method: "PATCH",
         body: { reason },
       }),
+    adminOrders: (page = 0) =>
+      call<Page<AdminOrder>>("order", `/api/admin/orders?${query({ page, size: 20 })}`),
     myAssignments: (page = 0) =>
       call<Page<Delivery>>("delivery", `/api/deliveries/my-assignments?${query({ page, size: 20 })}`),
     deliveryByOrder: (id: string) =>

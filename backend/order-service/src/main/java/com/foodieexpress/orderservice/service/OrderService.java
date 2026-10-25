@@ -54,7 +54,6 @@ import org.springframework.security.access.AccessDeniedException;
 @Service
 public class OrderService {
 
-    private static final BigDecimal DELIVERY_FEE = new BigDecimal("3.99");
     private static final BigDecimal ZERO_MONEY = new BigDecimal("0.00");
     private static final Pattern PRICE_FORMAT = Pattern.compile("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$");
     private static final Pattern OBJECT_ID = Pattern.compile("^[a-fA-F0-9]{24}$");
@@ -109,7 +108,7 @@ public class OrderService {
                 .map(OrderItemSnapshot::lineTotal)
                 .reduce(ZERO_MONEY, BigDecimal::add)
                 .setScale(2, RoundingMode.UNNECESSARY);
-        BigDecimal total = subtotal.add(DELIVERY_FEE).subtract(ZERO_MONEY);
+        BigDecimal total = subtotal;
         if (subtotal.precision() > MAX_MONEY_PRECISION || total.precision() > MAX_MONEY_PRECISION) {
             throw new InvalidOrderException("Order amount exceeds the supported limit");
         }
@@ -120,9 +119,9 @@ public class OrderService {
         order.setRestaurantId(restaurantId);
         order.setItems(snapshots);
         order.setDeliveryAddress(addressSnapshot(addressResponse.address()));
-        order.setCurrency("USD");
+        order.setCurrency("INR");
         order.setSubtotal(subtotal);
-        order.setDeliveryFee(DELIVERY_FEE);
+        order.setDeliveryFee(ZERO_MONEY);
         order.setDiscount(ZERO_MONEY);
         order.setTotal(total);
         order.setPaymentStatus(PaymentStatus.SIMULATED_UNPAID);
@@ -195,6 +194,13 @@ public class OrderService {
                     PageRequest.of(page, size, Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id"))));
             return PageResponse.from(orders, "createdAt,asc",
                     com.foodieexpress.orderservice.dto.OrderResponse::from);
+        }
+
+        public PageResponse<com.foodieexpress.orderservice.dto.AdminOrderResponse> listAllOrders(int page, int size) {
+            var orders = orderRepository.findAll(PageRequest.of(
+                    page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id"))));
+            return PageResponse.from(orders, "createdAt,desc",
+                    com.foodieexpress.orderservice.dto.AdminOrderResponse::from);
         }
 
         public Order updateRestaurantOrder(
@@ -608,8 +614,8 @@ public class OrderService {
             if (!quoteItem.available()) {
                 throw new InvalidOrderException("One or more menu items are unavailable");
             }
-            if (!"USD".equals(quoteItem.currency())) {
-                throw new InvalidOrderException("Only USD menu items can be ordered");
+            if (!"INR".equals(quoteItem.currency())) {
+                throw new InvalidOrderException("Only INR menu items can be ordered; legacy prices must be explicitly repriced");
             }
             BigDecimal price = parsePrice(quoteItem.price());
             BigDecimal lineTotal = price.multiply(BigDecimal.valueOf(requested.getQuantity()))

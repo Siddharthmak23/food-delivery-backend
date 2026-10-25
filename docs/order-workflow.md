@@ -46,11 +46,11 @@ Assignment is handled by `PATCH /api/deliveries/{id}/assign`; pickup and complet
 
 ## 3. Add items to cart
 
-The cart is local Redux state in MVP. Each line stores `menuItemId`, `restaurantId`, display name/price for UI, and quantity. Switching to another restaurant requires clearing/replacing the cart or presenting a user-facing confirmation. Cart values are conveniences only: the backend ignores client-supplied names/prices/totals and validates current menu data at checkout. Cart persistence on the server is deferred.
+The cart is local Redux state persisted in browser session storage. Each line stores `menuItemId`, `restaurantId`, restaurant/item display data, INR price, currency, and quantity. Switching to another restaurant requires clearing/replacing the cart or presenting a user-facing confirmation. Cart values are conveniences only: the backend ignores client-supplied names/prices/totals and validates current menu data at checkout. Cart persistence on the server is deferred.
 
 ## 4. Checkout and order creation
 
-The customer submits `restaurantId`, a bounded list of `{menuItemId, quantity}`, a saved `addressId`, and an `Idempotency-Key`. **Implemented:** Order Service authenticates the user, fetches the address for that user from User Service using the scoped internal endpoint, fetches current prices and availability from Restaurant Service, checks all items belong to the one restaurant, and computes USD totals using `BigDecimal`. It stores the order and immutable item/address snapshots in `food_order`; no payment is processed. The response begins in `PLACED` / `SIMULATED_UNPAID`.
+The customer submits `restaurantId`, a bounded list of `{menuItemId, quantity}`, a saved `addressId`, and an `Idempotency-Key`. **Implemented:** Order Service authenticates the user, fetches the address for that user from User Service using the scoped internal endpoint, fetches current prices and availability from Restaurant Service, checks all items belong to the one restaurant, accepts INR quotes only, and computes totals using `BigDecimal`. New order totals have no delivery fee or discount. It stores the order and immutable item/address snapshots in `food_order`; no payment is processed. Existing USD menu/order/delivery data is not converted or rewritten; legacy USD menu items cannot be ordered until an owner explicitly reprices them in INR. The response begins in `PLACED` / `SIMULATED_UNPAID`.
 
 ```mermaid
 sequenceDiagram

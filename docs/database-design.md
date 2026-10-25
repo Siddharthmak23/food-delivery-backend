@@ -2,7 +2,7 @@
 
 All collections are planned and owned by exactly one service. Each service uses its own logical MongoDB database. IDs are MongoDB ObjectIds serialized as 24-character hex strings at API boundaries. Cross-service references are IDs only; there are no cross-database joins or direct collection access.
 
-Money is represented in Java as `BigDecimal`, encoded in MongoDB as BSON Decimal128. Extended JSON examples use `{"$numberDecimal":"12.50"}`. API contracts serialize money as decimal strings. Currency is ISO 4217 `USD` in MVP. No Java `float` or `double` is used for currency.
+Money is represented in Java as `BigDecimal`, encoded in MongoDB as BSON Decimal128. Extended JSON examples use `{"$numberDecimal":"12.50"}`. API contracts serialize money as decimal strings. New prices, orders, and deliveries use ISO 4217 `INR`; no Java `float` or `double` is used for currency. Existing USD documents are historical legacy data: this implementation does not convert, relabel, or rewrite them. Legacy menu prices must be explicitly repriced by an authorized owner before they can be ordered.
 
 Dates are BSON dates stored in UTC; APIs emit ISO 8601 UTC strings. MongoDB schema validation should enforce required fields, types, enum values, and basic ranges where practical, in addition to Java Bean Validation.
 
@@ -91,7 +91,7 @@ All shown fields are required except `description` and `address.line2`. `ownerUs
   "description": "Example menu item",
   "category": "Main",
   "price": { "$numberDecimal": "12.50" },
-  "currency": "USD",
+  "currency": "INR",
   "available": true,
   "createdAt": { "$date": "2026-10-22T09:00:00Z" },
   "updatedAt": { "$date": "2026-10-22T09:00:00Z" }
@@ -133,11 +133,11 @@ All shown fields are required except `description` and `address.line2`. `ownerUs
     "countryCode": "US",
     "phone": "+10000000000"
   },
-  "currency": "USD",
+  "currency": "INR",
   "subtotal": { "$numberDecimal": "25.00" },
-  "deliveryFee": { "$numberDecimal": "3.99" },
+  "deliveryFee": { "$numberDecimal": "0.00" },
   "discount": { "$numberDecimal": "0.00" },
-  "total": { "$numberDecimal": "28.99" },
+  "total": { "$numberDecimal": "25.00" },
   "paymentStatus": "SIMULATED_UNPAID",
   "status": "PLACED",
   "deliveryProvisioningStatus": "NOT_REQUESTED",
@@ -156,7 +156,7 @@ All shown fields are required except `description` and `address.line2`. `ownerUs
 
 Required fields include all top-level fields shown; `deliveryId` is null until an accepted order's delivery is successfully validated and associated, and `deliveryEvents` starts empty. `cancellationReason` and `rejectionReason` are optional/null and only populated by the corresponding transition. `deliveryProvisioningStatus` is `NOT_REQUESTED`, `PENDING`, `RETRY_REQUIRED`, or `COMPLETE`; it starts as `NOT_REQUESTED` and is always persisted. `cancellationStatus` is `NONE`, `PENDING`, `RETRY_REQUIRED`, or `COMPLETE`. Each delivery event contains `eventId`, `deliveryId`, callback `status`, and UTC `occurredAt`; event IDs are idempotency keys. Each item requires a menu ID, checkout-time name, positive integer quantity, unit price, and line total. `deliveryAddress` is a sanitized immutable snapshot plus source `addressId`; it must not be reloaded to display historical orders. Price snapshots are copied from Restaurant Service at checkout, never reconstructed from the current menu. Totals and snapshots are immutable after creation; lifecycle, cancellation, and provisioning fields may change.
 
-**MVP pricing policy:** currency is USD; menu prices have two decimal places; line total is quantity × unit price rounded to two decimals using `BigDecimal` with `HALF_UP`; subtotal is the exact sum of rounded line totals; fixed delivery fee is `$3.99`; discount is `$0.00`; MVP tax is `$0.00` and explicitly not a tax calculation. `total = subtotal + deliveryFee - discount`. The Order Service calculates every value server-side. Checkout is simulated and `paymentStatus` is always `SIMULATED_UNPAID`; no payment authorization or settlement occurs.
+**Current pricing policy:** all new menu items and orders use INR; prices have two decimal places; line total is quantity × unit price rounded to two decimals using `BigDecimal` with `HALF_UP`; subtotal is the exact sum of rounded line totals; delivery fee and discount are both `₹0.00`, with no tax calculation. `total = subtotal + deliveryFee - discount`. The Order Service calculates every value server-side. Checkout is simulated and `paymentStatus` is always `SIMULATED_UNPAID`; no payment authorization, settlement, or external INR payment processing occurs. Historical USD documents retain their stored currency and amounts.
 
 **Indexes/queries:** The Order model declares `customer_history_idx` (`{ customerId: 1, createdAt: -1, _id: -1 }`), `restaurant_history_idx` (`{ restaurantId: 1, createdAt: 1, _id: 1 }`), `restaurant_status_created_idx` (`{ restaurantId: 1, status: 1, createdAt: 1 }`), `status_created_idx` (`{ status: 1, createdAt: 1 }`), and unique `customer_idempotency_unique` (`{ customerId: 1, "idempotency.key": 1 }`). Application startup has automatic index creation disabled; these must be provisioned before serving production checkout. `restaurant_history_idx` supports owner-scoped listing; the restaurant/status index supports status-filtered operational queries. Delivery callbacks use the persisted `deliveryId` and bounded `deliveryEvents`. Bound item count, quantity, and callback events to prevent unbounded documents. Orders are historical records; retention/deletion policy must be decided before production.
 

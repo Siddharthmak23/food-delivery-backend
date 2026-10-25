@@ -106,6 +106,81 @@ class RestaurantServiceApplicationTests {
     }
 
     @Test
+    void menuItemRequestsRejectNonInrCurrency() throws Exception {
+        String request = """
+                {
+                  "name":"Example item",
+                  "description":"Example",
+                  "category":"Main",
+                  "price":"12.50",
+                  "currency":"USD",
+                  "available":true
+                }
+                """;
+        MvcResult createResult = mockMvc.perform(post("/api/restaurants/672000000000000000000001/menu-items")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andReturn();
+        assertEquals(400, createResult.getResponse().getStatus());
+
+        MvcResult updateResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/api/menu-items/672000000000000000000010")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andReturn();
+        assertEquals(400, updateResult.getResponse().getStatus());
+    }
+
+    @Test
+    void acceptsInrForMenuCreateAndUpdateBeforeDatabaseAccess() throws Exception {
+        String request = """
+                {
+                  "name":"Example item",
+                  "description":"Example",
+                  "category":"Main",
+                  "price":"12.50",
+                  "currency":"INR",
+                  "available":true
+                }
+                """;
+        MvcResult createResult = mockMvc.perform(post("/api/restaurants/672000000000000000000001/menu-items")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andReturn();
+        assertEquals(503, createResult.getResponse().getStatus());
+
+        MvcResult updateResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/api/menu-items/672000000000000000000010")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andReturn();
+        assertEquals(503, updateResult.getResponse().getStatus());
+    }
+
+    @Test
+    void adminRestaurantListRequiresAdminRole() throws Exception {
+        assertEquals(401, mockMvc.perform(get("/api/admin/restaurants")
+                .param("status", "PENDING_APPROVAL")).andReturn().getResponse().getStatus());
+
+        MvcResult owner = mockMvc.perform(get("/api/admin/restaurants")
+                        .param("status", "PENDING_APPROVAL")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER")))
+                .andReturn();
+        assertEquals(403, owner.getResponse().getStatus());
+
+        MvcResult admin = mockMvc.perform(get("/api/admin/restaurants")
+                        .param("status", "PENDING_APPROVAL")
+                        .header("Authorization", "Bearer " + tokenWithRole("ADMIN")))
+                .andReturn();
+        assertEquals(503, admin.getResponse().getStatus());
+        assertTrue(admin.getResponse().getContentAsString().contains("\"code\":\"DEPENDENCY_UNAVAILABLE\""));
+    }
+
+    @Test
     void internalRoutesRejectMissingUserAndTamperedTokens() throws Exception {
         String path = "/internal/restaurants/672000000000000000000001/owners/671000000000000000000001";
         assertEquals(401, mockMvc.perform(get(path)).andReturn().getResponse().getStatus());
@@ -196,6 +271,20 @@ class RestaurantServiceApplicationTests {
                 .issuedAt(issuedAt)
                 .expiresAt(expiresAt)
                 .claim("roles", List.of("CUSTOMER"))
+                .build();
+        return jwtEncoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
+    }
+
+    private String tokenWithRole(String role) {
+        Instant now = Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer("foodieexpress-user-service")
+                .audience(List.of("foodieexpress-api"))
+                .subject("671000000000000000000001")
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(300))
+                .claim("roles", List.of(role))
                 .build();
         return jwtEncoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();

@@ -44,8 +44,13 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ApiError> handleUnreadableMessage() {
-        return response(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "Request body is malformed", List.of());
+    public ResponseEntity<ApiError> handleUnreadableMessage(HttpMessageNotReadableException exception) {
+        Throwable cause = exception.getMostSpecificCause();
+        LOGGER.warn("Malformed request body exceptionType={} causeType={}",
+                exception.getClass().getSimpleName(),
+                cause.getClass().getSimpleName());
+        return response(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST",
+                "Request body is malformed. Check the JSON fields and try again.", List.of());
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
@@ -57,6 +62,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDuplicateEmail() {
         return response(HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED",
                 "An account with this email address already exists", List.of());
+    }
+
+    @ExceptionHandler(DuplicateAddressException.class)
+    public ResponseEntity<ApiError> handleDuplicateAddress(DuplicateAddressException exception) {
+        return response(HttpStatus.CONFLICT, "DUPLICATE_ADDRESS", exception.getMessage(), List.of());
     }
 
     @ExceptionHandler(InvalidCredentialsException.class)

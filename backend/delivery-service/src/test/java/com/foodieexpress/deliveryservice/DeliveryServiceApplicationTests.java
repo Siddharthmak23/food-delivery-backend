@@ -144,6 +144,31 @@ class DeliveryServiceApplicationTests {
     }
 
     @Test
+    void provisioningRejectsNonInrCurrencyBeforePersistence() throws Exception {
+        String orderToken = orderToken("delivery:create", Instant.now().plusSeconds(60));
+        String orderId = "673000000000000000000001";
+        MvcResult result = mockMvc.perform(post("/api/deliveries")
+                        .header("Authorization", "Bearer " + orderToken)
+                        .header("Idempotency-Key", orderId)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "orderId":"673000000000000000000001",
+                                  "restaurantId":"672000000000000000000001",
+                                  "customerId":"671000000000000000000001",
+                                  "pickupAddress":{"recipientName":"Kitchen","line1":"1 Main St","city":"City",
+                                    "region":"State","postalCode":"380001","countryCode":"IN","phone":"+919876543210"},
+                                  "deliveryAddress":{"recipientName":"Customer","line1":"2 Main St","city":"City",
+                                    "region":"State","postalCode":"380001","countryCode":"IN","phone":"+919876543210"},
+                                  "currency":"USD"
+                                }
+                                """))
+                .andReturn();
+
+        assertEquals(400, result.getResponse().getStatus());
+    }
+
+    @Test
     void deliveryCallbackTokensUseIndependentKeyAndAudience() throws Exception {
         var parsed = JWSObject.parse(internalOrderTokenService.issueStatusUpdateToken());
         assertEquals("ES256", parsed.getHeader().getAlgorithm().getName());

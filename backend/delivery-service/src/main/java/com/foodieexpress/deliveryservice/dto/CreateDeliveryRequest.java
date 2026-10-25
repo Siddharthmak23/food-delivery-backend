@@ -11,5 +11,5 @@ public record CreateDeliveryRequest(
         @NotBlank @Pattern(regexp = "^[a-fA-F0-9]{24}$") String customerId,
         @NotNull @Valid PickupAddressRequest pickupAddress,
         @NotNull @Valid DeliveryAddressRequest deliveryAddress,
-        @NotBlank @Pattern(regexp = "^USD$") String currency) {
+        @NotBlank @Pattern(regexp = "^INR$") String currency) {
 }

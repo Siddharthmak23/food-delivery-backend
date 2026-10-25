@@ -252,7 +252,7 @@ class DeliveryMongoIntegrationTests {
                     "region":"CA","postalCode":"90000","countryCode":"US","phone":"+10000000000"},
                   "deliveryAddress":{"recipientName":"Customer","line1":"%s","city":"City",
                     "region":"CA","postalCode":"90000","countryCode":"US","phone":"+10000000000"},
-                  "currency":"USD"
+                  "currency":"INR"
                 }
                 """.formatted(orderId, RESTAURANT_ID, CUSTOMER_ID, addressLine);
     }

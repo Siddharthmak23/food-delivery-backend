@@ -157,17 +157,18 @@ class OrderMongoIntegrationTests {
         assertEquals("PLACED", response.get("status").asText());
         assertEquals("SIMULATED_UNPAID", response.get("paymentStatus").asText());
         assertEquals("32.05", response.get("subtotal").asText());
-        assertEquals("3.99", response.get("deliveryFee").asText());
+        assertEquals("0.00", response.get("deliveryFee").asText());
         assertEquals("0.00", response.get("discount").asText());
-        assertEquals("36.04", response.get("total").asText());
+        assertEquals("32.05", response.get("total").asText());
+        assertEquals("INR", response.get("currency").asText());
         assertEquals("Pasta", response.get("items").get(0).get("name").asText());
         assertEquals("12.50", response.get("items").get(0).get("unitPrice").asText());
         assertEquals("10 Main St", response.get("deliveryAddress").get("line1").asText());
 
         Order stored = orderRepository.findAll().getFirst();
         assertEquals(CUSTOMER_ID, stored.getCustomerId());
-        assertEquals("USD", stored.getCurrency());
-        assertEquals("36.04", stored.getTotal().toPlainString());
+        assertEquals("INR", stored.getCurrency());
+        assertEquals("32.05", stored.getTotal().toPlainString());
         assertEquals(ADDRESS_ID, stored.getDeliveryAddress().addressId());
         assertEquals(1, quoteClient.calls());
     }
@@ -186,7 +187,7 @@ class OrderMongoIntegrationTests {
     }
 
     @Test
-    void rejectsUnavailableMissingMalformedAndNonUsdQuotesWithoutSaving() throws Exception {
+    void rejectsUnavailableMissingMalformedAndNonInrQuotesWithoutSaving() throws Exception {
         quoteClient.setScenario(StubRestaurantQuoteClient.Scenario.UNAVAILABLE);
         createOrder(CUSTOMER_ID, "unavailable-item", validRequest()).andExpect(status().isUnprocessableEntity());
         assertEquals(0, orderRepository.count());
@@ -617,7 +618,7 @@ class OrderMongoIntegrationTests {
                             item.menuItemId().equals(ITEM_ONE_ID) ? "Pasta" : "Salad",
                             item.quantity(),
                             item.menuItemId().equals(ITEM_ONE_ID) ? "12.50" : "2.35",
-                            scenario == Scenario.UNSUPPORTED_CURRENCY ? "EUR" : "USD",
+                            scenario == Scenario.UNSUPPORTED_CURRENCY ? "USD" : "INR",
                             scenario != Scenario.UNAVAILABLE))
                     .toList();
             return new RestaurantQuoteResponse(restaurantId, items);

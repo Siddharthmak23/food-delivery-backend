@@ -251,7 +251,7 @@ class RestaurantMongoIntegrationTests {
                                   "name":"Invalid Plate",
                                   "category":"Main",
                                   "price":"-5.00",
-                                  "currency":"USD",
+                                  "currency":"INR",
                                   "available":true
                                 }
                                 """))
@@ -266,7 +266,7 @@ class RestaurantMongoIntegrationTests {
                                   "description":"Daily special",
                                   "category":"Main",
                                   "price":"10.5",
-                                  "currency":"USD",
+                                  "currency":"INR",
                                   "available":true
                                 }
                                 """))
@@ -282,15 +282,80 @@ class RestaurantMongoIntegrationTests {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "name":"Updated Plate",
-                                  "description":"Updated",
+                                  "name":"Rejected USD Update",
+                                  "description":"Must remain INR",
                                   "category":"Main",
-                                  "price":"11.00",
+                                  "price":"999.00",
                                   "currency":"USD",
                                   "available":true
                                 }
                                 """))
+                .andExpect(status().isBadRequest());
+        assertEquals("INR", menuItemRepository.findById(menuItemId).orElseThrow().getCurrency());
+        assertEquals(new java.math.BigDecimal("10.50"),
+                menuItemRepository.findById(menuItemId).orElseThrow().getPrice());
+
+        mockMvc.perform(put("/api/menu-items/{id}", menuItemId)
+                        .header("Authorization", "Bearer " + token(OWNER_ID, "RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Updated Plate",
+                                  "description":"Updated",
+                                  "category":"Main",
+                                  "price":"11.00",
+                                  "currency":"INR",
+                                  "available":true
+                                }
+                                """))
                 .andExpect(status().isOk());
+
+        MenuItem legacyItem = new MenuItem();
+        legacyItem.setRestaurantId(restaurantId);
+        legacyItem.setName("Legacy USD Plate");
+        legacyItem.setCategory("Main");
+        legacyItem.setPrice(new java.math.BigDecimal("10.00"));
+        legacyItem.setCurrency("USD");
+        legacyItem.setAvailable(true);
+        legacyItem.setCreatedAt(java.time.Instant.now());
+        legacyItem.setUpdatedAt(java.time.Instant.now());
+        legacyItem = menuItemRepository.save(legacyItem);
+        MvcResult repriced = mockMvc.perform(put("/api/menu-items/{id}", legacyItem.getId())
+                        .header("Authorization", "Bearer " + token(OWNER_ID, "RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Legacy USD Plate",
+                                  "description":"Explicit INR repricing",
+                                  "category":"Main",
+                                  "price":"250.00",
+                                  "currency":"INR",
+                                  "available":true
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertTrue(repriced.getResponse().getContentAsString().contains("\"price\":\"250.00\""));
+        assertTrue(repriced.getResponse().getContentAsString().contains("\"currency\":\"INR\""));
+        MenuItem persistedRepricing = menuItemRepository.findById(legacyItem.getId()).orElseThrow();
+        assertEquals(new java.math.BigDecimal("250.00"), persistedRepricing.getPrice());
+        assertEquals("INR", persistedRepricing.getCurrency());
+
+        mockMvc.perform(put("/api/menu-items/{id}", legacyItem.getId())
+                        .header("Authorization", "Bearer " + token(OTHER_OWNER_ID, "RESTAURANT_OWNER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Unauthorized",
+                                  "category":"Main",
+                                  "price":"1.00",
+                                  "currency":"INR",
+                                  "available":true
+                                }
+                                """))
+                .andExpect(status().isNotFound());
+        assertEquals("INR", menuItemRepository.findById(legacyItem.getId()).orElseThrow().getCurrency());
+
         MvcResult availability = mockMvc.perform(patch("/api/menu-items/{id}/availability", menuItemId)
                         .header("Authorization", "Bearer " + token(OWNER_ID, "RESTAURANT_OWNER"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -324,6 +389,7 @@ class RestaurantMongoIntegrationTests {
                 .andExpect(status().isOk())
                 .andReturn();
         assertTrue(adminList.getResponse().getContentAsString().contains("Owner Kitchen"));
+        assertTrue(adminList.getResponse().getContentAsString().contains("\"ownerUserId\":\"" + OWNER_ID + "\""));
     }
 
     private Restaurant seedRestaurant(
@@ -346,7 +412,7 @@ class RestaurantMongoIntegrationTests {
         item.setName(name);
         item.setCategory("Main");
         item.setPrice(new java.math.BigDecimal(price));
-        item.setCurrency("USD");
+        item.setCurrency("INR");
         item.setAvailable(available);
         item.setCreatedAt(Instant.now());
         item.setUpdatedAt(Instant.now());

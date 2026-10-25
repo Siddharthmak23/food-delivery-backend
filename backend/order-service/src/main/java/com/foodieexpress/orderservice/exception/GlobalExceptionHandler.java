@@ -18,6 +18,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -43,6 +44,12 @@ public class GlobalExceptionHandler {
                         violation.getMessage()))
                 .toList();
         return response(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "Request validation failed", fieldErrors);
+    }
+
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<ApiError> handleMethodValidation() {
+        return response(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED",
+                "Request validation failed", List.of());
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

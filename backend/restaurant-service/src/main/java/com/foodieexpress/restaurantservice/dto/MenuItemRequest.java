@@ -11,6 +11,6 @@ public record MenuItemRequest(
         @NotBlank @Size(max = 80) String category,
         @NotBlank @Size(max = 32)
         @Pattern(regexp = "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$") String price,
-        @NotBlank @Pattern(regexp = "^USD$") String currency,
+        @NotBlank @Pattern(regexp = "^INR$") String currency,
         @NotNull Boolean available) {
 }

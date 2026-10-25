@@ -10,8 +10,10 @@ import static org.mockito.Mockito.when;
 
 import com.foodieexpress.userservice.dto.LoginRequest;
 import com.foodieexpress.userservice.dto.RegisterRequest;
+import com.foodieexpress.userservice.dto.UpdateProfileRequest;
 import com.foodieexpress.userservice.exception.EmailAlreadyRegisteredException;
 import com.foodieexpress.userservice.exception.InvalidCredentialsException;
+import com.foodieexpress.userservice.exception.InvalidRequestException;
 import com.foodieexpress.userservice.model.User;
 import com.foodieexpress.userservice.model.UserRole;
 import com.foodieexpress.userservice.model.UserStatus;
@@ -98,5 +100,40 @@ class UserServiceTests {
         assertThrows(InvalidCredentialsException.class, () -> userService.login(
                 new LoginRequest("disabled@example.com", "long-test-password")));
         verify(jwtService, never()).issue(any(User.class));
+    }
+
+    @Test
+    void profileUpdateChangesOnlyAllowedFieldsForTheAuthenticatedUser() {
+        User existing = new User("person@example.com", "stored-hash", "Person", Instant.now());
+        existing.setId("671000000000000000000001");
+        existing.setPhone("1111111111");
+        existing.setRoles(java.util.Set.of(UserRole.CUSTOMER, UserRole.ADMIN));
+        when(userRepository.findById(existing.getId())).thenReturn(Optional.of(existing));
+        when(userRepository.save(existing)).thenReturn(existing);
+
+        User updated = userService.updateProfile(
+                existing.getId(), new UpdateProfileRequest(" Updated Person ", "+91 98765-43210"));
+
+        assertEquals("Updated Person", updated.getDisplayName());
+        assertEquals("+919876543210", updated.getPhone());
+        assertEquals("person@example.com", updated.getEmail());
+        assertEquals(java.util.Set.of(UserRole.CUSTOMER, UserRole.ADMIN), updated.getRoles());
+        verify(userRepository).findById(existing.getId());
+        verify(userRepository).save(existing);
+    }
+
+    @Test
+    void invalidProfilePhoneDoesNotChangeOrSaveTheExistingUser() {
+        User existing = new User("person@example.com", "stored-hash", "Person", Instant.now());
+        existing.setId("671000000000000000000001");
+        existing.setPhone("9876543210");
+        when(userRepository.findById(existing.getId())).thenReturn(Optional.of(existing));
+
+        assertThrows(InvalidRequestException.class, () -> userService.updateProfile(
+                existing.getId(), new UpdateProfileRequest("Changed Name", "333333333333")));
+
+        assertEquals("Person", existing.getDisplayName());
+        assertEquals("9876543210", existing.getPhone());
+        verify(userRepository, never()).save(any(User.class));
     }
 }

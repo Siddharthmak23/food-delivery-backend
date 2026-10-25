@@ -1,23 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { addItem, clearCart, setQuantity, type AppDispatch, type CartLine, type RootState } from "./store";
+import { addItem, clearCart, removeItem, setQuantity, type AppDispatch, type CartLine, type RootState } from "./store";
 import { ApiRequestError, createApi, tokenExpiry } from "./api";
-import type { Address, AddressInput, Delivery, MenuItem, Order, Restaurant, User } from "./types";
+import type { Address, AddressInput, AdminOrder, AdminRestaurant, Delivery, MenuItem, Order, Restaurant, User } from "./types";
+import { formatInr, formatLegacyMoney, isPositiveMoney, multiplyMoney, sumMoney } from "./money";
 
-type View = "restaurants" | "addresses" | "orders" | "owner" | "delivery" | "admin";
+type View = "restaurants" | "cart" | "profile" | "addresses" | "orders" | "owner" | "delivery" | "admin" | "approvals";
 const viewTitles: Record<View, string> = {
   restaurants: "Discover",
+  cart: "Cart",
+  profile: "Profile",
   addresses: "My addresses",
   orders: "My orders",
   owner: "Restaurant studio",
   delivery: "Delivery desk",
   admin: "Operations",
+  approvals: "Restaurant approvals",
 };
 const rolesForView: Partial<Record<View, string>> = {
+  profile: "CUSTOMER",
   addresses: "CUSTOMER",
   orders: "CUSTOMER",
   owner: "RESTAURANT_OWNER",
   admin: "ADMIN",
+  approvals: "ADMIN",
 };
 const initialAddress: AddressInput = {
   label: "",
@@ -30,6 +36,17 @@ const initialAddress: AddressInput = {
   countryCode: "IN",
   phone: "",
 };
+const initialRestaurantForm = {
+  name: "",
+  description: "",
+  cuisines: "Comfort food",
+  line1: "",
+  line2: "",
+  city: "",
+  region: "",
+  postalCode: "",
+  countryCode: "IN",
+};
 const indianRegions = [
   "Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar",
   "Chandigarh", "Chhattisgarh", "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Goa",
@@ -41,15 +58,11 @@ const indianRegions = [
 ];
 
 function canAccessView(view: View, user: User | null) {
-  if (view === "restaurants") return true;
+  if (view === "restaurants" || view === "cart") return true;
   if (!user) return false;
   if (view === "delivery") return user.roles.includes("DELIVERY_OPERATOR") || user.roles.includes("ADMIN");
   const requiredRole = rolesForView[view];
   return requiredRole !== undefined && user.roles.includes(requiredRole);
-}
-
-function formatMoney(value: string) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value));
 }
 
 function formatDate(value: string) {
@@ -69,13 +82,9 @@ type ToastMessage = {
 function DiscoveryView(props: {
   api: Api;
   user: User | null;
-  cart: CartLine[];
   busy: boolean;
   onRun: Run;
-  onAdd: (item: MenuItem) => void;
-  onQuantity: (id: string, quantity: number) => void;
-  onClear: () => void;
-  onCheckout: (addressId: string) => Promise<void>;
+  onAdd: (item: MenuItem, restaurantName: string) => void;
 }) {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [query, setQuery] = useState("");
@@ -83,23 +92,35 @@ function DiscoveryView(props: {
   const [search, setSearch] = useState({ q: "", cuisine: "" });
   const [selected, setSelected] = useState<Restaurant | null>(null);
   const [menu, setMenu] = useState<MenuItem[]>([]);
-  const [addresses, setAddresses] = useState<Address[]>([]);
-  const [addressId, setAddressId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [restaurantError, setRestaurantError] = useState("");
+  const [restaurantRetry, setRestaurantRetry] = useState(0);
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
-  const subtotal = props.cart.reduce((sum, line) => sum + Number(line.price) * line.quantity, 0);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
+    setRestaurantError("");
     props.api.listRestaurants({ q: search.q || undefined, cuisine: search.cuisine || undefined, page })
       .then((result) => {
+        if (!active) return;
         setRestaurants(result.items);
         setTotalPages(result.totalPages);
       })
-      .catch((reason: unknown) => props.onRun(() => Promise.reject(reason)))
-      .finally(() => setLoading(false));
-  }, [props.api, props.onRun, page, search]);
+      .catch(async (reason: unknown) => {
+        if (active) {
+          setRestaurantError(messageFor(reason));
+          setRestaurants([]);
+          setTotalPages(0);
+        }
+        await props.onRun(() => Promise.reject(reason));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [props.api, props.onRun, page, restaurantRetry, search]);
 
   useEffect(() => {
     if (!selected) {
@@ -115,23 +136,6 @@ function DiscoveryView(props: {
       .catch((reason: unknown) => props.onRun(() => Promise.reject(reason)))
       .finally(() => setLoading(false));
   }, [props.api, props.onRun, selected?.id]);
-
-  useEffect(() => {
-    if (!props.user) {
-      setAddresses([]);
-      setAddressId("");
-      return;
-    }
-    props.api.listAddresses()
-      .then((page) => {
-        const eligibleAddresses = page.items.filter((address) => address.countryCode === "IN");
-        setAddresses(page.items);
-        setAddressId((existing) => eligibleAddresses.some((address) => address.id === existing)
-          ? existing
-          : eligibleAddresses[0]?.id || "");
-      })
-      .catch((reason: unknown) => props.onRun(() => Promise.reject(reason)));
-  }, [props.api, props.onRun, props.user?.id]);
 
   return (
     <>
@@ -152,45 +156,6 @@ function DiscoveryView(props: {
         </div>
       </section>
 
-      {props.user && props.cart.length > 0 && (
-        <section className="cart-panel">
-          <div className="section-heading compact-heading">
-            <div><span className="eyebrow">YOUR ORDER</span><h2>Something delicious</h2></div>
-            <button className="text-button" onClick={props.onClear}>Clear cart</button>
-          </div>
-          <div className="cart-lines">
-            {props.cart.map((line) => (
-              <div className="cart-line" key={line.menuItemId}>
-                <div><strong>{line.name}</strong><small>{formatMoney(line.price)} each</small></div>
-                <div className="quantity-control">
-                  <button aria-label={`Remove one ${line.name}`} onClick={() => props.onQuantity(line.menuItemId, line.quantity - 1)}>−</button>
-                  <span>{line.quantity}</span>
-                  <button aria-label={`Add one ${line.name}`} disabled={line.quantity >= 100} onClick={() => props.onQuantity(line.menuItemId, line.quantity + 1)}>+</button>
-                </div>
-                <strong>{formatMoney((Number(line.price) * line.quantity).toFixed(2))}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="checkout-row">
-            <label className="field checkout-address">
-              <span>Deliver to a saved address</span>
-              <select value={addressId} onChange={(event) => setAddressId(event.target.value)} required>
-                <option value="">Choose address</option>
-                {addresses.filter((address) => address.countryCode === "IN").map((address) => <option value={address.id} key={address.id}>{address.label} · {address.line1}, {address.city}</option>)}
-              </select>
-              {!addresses.some((address) => address.countryCode === "IN") && <small>Add an Indian delivery address before checkout.</small>}
-            </label>
-            <div className="checkout-total"><small>Estimated subtotal · backend recalculates</small><strong>{formatMoney(subtotal.toFixed(2))}</strong><span>+ $3.99 delivery fee at checkout</span></div>
-            <button
-              className="button button-primary"
-              disabled={props.busy || !addressId || !addresses.length}
-              onClick={() => void props.onCheckout(addressId)}
-            >{props.busy ? "Placing order…" : "Place order"}</button>
-          </div>
-          <p className="fine-print">Prices are estimates until checkout. Payment is simulated and no charge is made.</p>
-        </section>
-      )}
-
       <section className="restaurants-section" id="restaurants-list">
         <div className="section-heading">
           <div><span className="eyebrow">A GOOD PLACE TO START</span><h2>Find your kind of flavor</h2></div>
@@ -201,7 +166,14 @@ function DiscoveryView(props: {
           <label className="search-input cuisine-input"><span aria-hidden="true">◌</span><input value={cuisine} onChange={(event) => setCuisine(event.target.value)} placeholder="Cuisine" aria-label="Filter by cuisine" /></label>
           <button className="button button-dark" type="submit">Search</button>
         </form>
-        {loading && !selected ? <Loading label="Finding neighborhood favorites" /> : restaurants.length === 0 ? (
+        {loading && !selected ? <Loading label="Finding neighborhood favorites" /> : restaurantError ? (
+          <div className="empty-state" role="alert">
+            <span className="empty-icon">!</span>
+            <strong>Restaurants are unavailable</strong>
+            <p>{restaurantError}</p>
+            <button className="button button-outline button-small" onClick={() => setRestaurantRetry((current) => current + 1)}>Try again</button>
+          </div>
+        ) : restaurants.length === 0 ? (
           <EmptyState title="No kitchens found" text="Try a different restaurant name or cuisine." />
         ) : (
           <div className="restaurant-grid">
@@ -234,9 +206,11 @@ function DiscoveryView(props: {
               {loading ? <Loading label="Loading menu" /> : menu.length === 0 ? <EmptyState title="Menu is empty" text="This kitchen hasn’t published any menu items yet." /> : menu.map((item) => (
                 <article className="menu-item" key={item.id}>
                   <span className="menu-item-icon">✳</span>
-                  <div className="menu-item-copy"><strong>{item.name}</strong><small>{item.description || item.category}</small><span>{formatMoney(item.price)}</span></div>
-                  {item.available
-                    ? <button className="button button-outline button-small" onClick={() => props.onAdd(item)}>Add +</button>
+                  <div className="menu-item-copy"><strong>{item.name}</strong><small>{item.description || item.category}</small><span>{formatLegacyMoney(item.price, item.currency)}</span></div>
+                  {item.available && item.currency === "INR"
+                    ? <button className="button button-outline button-small" onClick={() => props.onAdd(item, selected.name)}>Add +</button>
+                    : item.currency !== "INR"
+                      ? <span className="unavailable-tag">Legacy {item.currency} price · reprice in INR</span>
                     : <span className="unavailable-tag">Sold out</span>}
                 </article>
               ))}
@@ -245,6 +219,258 @@ function DiscoveryView(props: {
         </div>
       )}
     </>
+  );
+}
+
+function CartView({ api, user, cart, busy, onRun, onQuantity, onRemove, onContinueShopping, onSignIn, onCheckout }: {
+  api: Api;
+  user: User | null;
+  cart: CartLine[];
+  busy: boolean;
+  onRun: Run;
+  onQuantity: (id: string, quantity: number) => void;
+  onRemove: (id: string) => void;
+  onContinueShopping: () => void;
+  onSignIn: () => void;
+  onCheckout: (addressId: string) => Promise<void>;
+}) {
+  const [addresses, setAddresses] = useState<Address[]>([]);
+  const [addressId, setAddressId] = useState("");
+  const [addressesLoading, setAddressesLoading] = useState(false);
+  const [addressError, setAddressError] = useState("");
+  const [checkoutStarted, setCheckoutStarted] = useState(false);
+  const subtotal = sumMoney(cart.map((line) => multiplyMoney(line.price, line.quantity)));
+  const unsupportedCurrency = cart.some((line) => line.currency !== "INR");
+
+  const loadAddresses = useCallback(async () => {
+    if (!user) return;
+    setAddressesLoading(true);
+    setAddressError("");
+    const result = await onRun(() => api.listAddresses());
+    if (result) {
+      const eligible = result.items.filter((address) => address.countryCode === "IN");
+      setAddresses(eligible);
+      setAddressId((current) => eligible.some((address) => address.id === current)
+        ? current
+        : eligible[0]?.id ?? "");
+    } else {
+      setAddressError("Could not load saved addresses. Try again.");
+    }
+    setAddressesLoading(false);
+  }, [api, onRun, user]);
+
+  useEffect(() => {
+    if (checkoutStarted && user) void loadAddresses();
+  }, [checkoutStarted, loadAddresses, user]);
+
+  return (
+    <section className="workspace">
+      <PageIntro eyebrow="YOUR FOOD, READY WHEN YOU ARE" title="Your cart" text="Review your items before checkout." />
+      {cart.length === 0 ? (
+        <div className="surface-card">
+          <EmptyState title="Your cart is empty" text="Explore restaurants and add a dish to get started." />
+          <div className="cart-page-actions"><button className="button button-primary" type="button" onClick={onContinueShopping}>Continue shopping</button></div>
+        </div>
+      ) : (
+        <>
+          <section className="surface-card cart-page-card">
+            <div className="section-heading compact-heading">
+              <div><span className="eyebrow">YOUR ORDER</span><h2>{cart.reduce((count, line) => count + line.quantity, 0)} items</h2></div>
+              <button className="text-button" type="button" onClick={onContinueShopping}>Continue shopping</button>
+            </div>
+            <div className="cart-page-lines">
+              {cart.map((line) => (
+                <article className="cart-page-line" key={line.menuItemId}>
+                  <div className="cart-page-item">
+                    <strong>{line.name}</strong>
+                    <small>{line.restaurantName}</small>
+                    <small>{formatLegacyMoney(line.price, line.currency)} each</small>
+                  </div>
+                  <div className="quantity-control">
+                    <button type="button" aria-label={`Remove one ${line.name}`} disabled={busy} onClick={() => onQuantity(line.menuItemId, line.quantity - 1)}>−</button>
+                    <span>{line.quantity}</span>
+                    <button type="button" aria-label={`Add one ${line.name}`} disabled={busy || line.quantity >= 100} onClick={() => onQuantity(line.menuItemId, line.quantity + 1)}>+</button>
+                  </div>
+                  <strong className="cart-page-line-total">{formatLegacyMoney(multiplyMoney(line.price, line.quantity), line.currency)}</strong>
+                  <button className="text-button cart-remove" type="button" disabled={busy} onClick={() => onRemove(line.menuItemId)}>Remove</button>
+                </article>
+              ))}
+            </div>
+            <div className="cart-page-summary">
+              <div><span>Subtotal</span><strong>{unsupportedCurrency ? "Unavailable" : formatInr(subtotal)}</strong></div>
+              <small>There are currently no delivery fees or discounts.</small>
+              {unsupportedCurrency && <p role="alert">This cart contains an older non-INR price. Remove it and add a menu item explicitly priced in INR; no currency conversion was applied.</p>}
+            </div>
+            <div className="cart-page-actions">
+              <button className="button button-outline" type="button" onClick={onContinueShopping}>Continue shopping</button>
+              <button className="button button-primary" type="button" disabled={busy || unsupportedCurrency} onClick={() => {
+                if (!user) onSignIn();
+                else setCheckoutStarted(true);
+              }}>Proceed to Checkout</button>
+            </div>
+          </section>
+          {checkoutStarted && (
+            <section className="surface-card cart-checkout">
+              <div className="section-heading compact-heading"><div><span className="eyebrow">CHECKOUT</span><h2>Delivery address</h2></div></div>
+              {addressesLoading ? <Loading label="Loading saved addresses" /> : addressError ? (
+                <div><p role="alert">{addressError}</p><button className="button button-outline" type="button" disabled={busy} onClick={() => void loadAddresses()}>Try again</button></div>
+              ) : addresses.length === 0 ? (
+                <div><EmptyState title="Add an Indian delivery address" text="A saved Indian address is required to place this order." /><button className="button button-outline" type="button" onClick={onContinueShopping}>Continue shopping</button></div>
+              ) : (
+                <>
+                  <label className="field checkout-address">
+                    <span>Deliver to a saved address</span>
+                    <select value={addressId} onChange={(event) => setAddressId(event.target.value)}>
+                      <option value="">Choose address</option>
+                      {addresses.map((address) => <option value={address.id} key={address.id}>{address.label} · {address.line1}, {address.city}</option>)}
+                    </select>
+                  </label>
+                  <div className="cart-checkout-total"><span>Order total · backend recalculates</span><strong>{formatInr(subtotal)}</strong></div>
+                  <div className="cart-page-actions">
+                    <button className="button button-outline" type="button" disabled={busy} onClick={() => setCheckoutStarted(false)}>Back to cart</button>
+                    <button className="button button-primary" type="button" disabled={busy || !addressId} onClick={() => void onCheckout(addressId)}>{busy ? "Placing order…" : "Place order"}</button>
+                  </div>
+                  <p className="fine-print">Payment is simulated; no payment provider is connected.</p>
+                </>
+              )}
+            </section>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ProfileView({ api, busy, onRun, onNotify, onNavigateToAddresses }: {
+  api: Api;
+  busy: boolean;
+  onRun: Run;
+  onNotify: (message: string, kind: ToastKind) => void;
+  onNavigateToAddresses: () => void;
+}) {
+  const [profile, setProfile] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ displayName: "", phone: "" });
+  const [errors, setErrors] = useState<{ displayName?: string; phone?: string }>({});
+  const [submitted, setSubmitted] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const saving = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    void onRun(() => api.profile())
+      .then((result) => {
+        if (active && result) setProfile(result);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [api, onRun]);
+
+  const startEditing = () => {
+    if (!profile) return;
+    setForm({ displayName: profile.displayName, phone: profile.phone ?? "" });
+    setErrors({});
+    setSubmitted(false);
+    setPhoneTouched(false);
+    setEditing(true);
+  };
+  const cancelEditing = () => {
+    setForm({ displayName: profile?.displayName ?? "", phone: profile?.phone ?? "" });
+    setErrors({});
+    setSubmitted(false);
+    setPhoneTouched(false);
+    setEditing(false);
+  };
+  const validate = (values: typeof form) => {
+    const next: typeof errors = {};
+    if (!values.displayName.trim()) next.displayName = "Enter your name.";
+    else if (values.displayName.trim().length > 100) next.displayName = "Name must be 100 characters or fewer.";
+    if (values.phone.trim() && !normalizeIndianPhone(values.phone)) {
+      next.phone = "Enter a valid Indian mobile number: 10 digits starting with 6–9, optionally prefixed by +91.";
+    }
+    return next;
+  };
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!profile || saving.current) return;
+    setSubmitted(true);
+    const validation = validate(form);
+    setErrors(validation);
+    if (Object.keys(validation).length) {
+      onNotify("Please correct the highlighted profile fields.", "error");
+      return;
+    }
+    const normalizedPhone = form.phone.trim() ? normalizeIndianPhone(form.phone) : "";
+    if (normalizedPhone === null) return;
+    saving.current = true;
+    const result = await onRun(() => api.updateProfile({
+      displayName: form.displayName.trim(),
+      phone: normalizedPhone,
+    }));
+    saving.current = false;
+    if (result) {
+      setProfile(result);
+      setEditing(false);
+      setErrors({});
+      setSubmitted(false);
+      onNotify("Profile updated successfully.", "success");
+    }
+  };
+  const updateField = (field: keyof typeof form, value: string) => {
+    const next = { ...form, [field]: value };
+    setForm(next);
+    if (submitted || errors[field] || (field === "phone" && phoneTouched)) setErrors(validate(next));
+  };
+
+  return (
+    <section className="workspace">
+      <PageIntro eyebrow="YOUR FOODIEEXPRESS ACCOUNT" title="Your profile" text="Your account details and delivery preferences." />
+      <section className="surface-card profile-card" aria-label="Customer profile">
+        {loading ? <Loading label="Loading your profile" /> : profile ? editing ? (
+          <form className="profile-form" onSubmit={(event) => void saveProfile(event)} noValidate>
+            <label className="field" htmlFor="profile-display-name"><span>Name</span>
+              <input id="profile-display-name" value={form.displayName} maxLength={100} required
+                aria-invalid={Boolean(errors.displayName && (submitted || errors.displayName))}
+                onChange={(event) => updateField("displayName", event.target.value)}
+                onBlur={() => setErrors(validate(form))} />
+            </label>
+            {(submitted || errors.displayName) && errors.displayName && <small className="field-error">{errors.displayName}</small>}
+            <label className="field" htmlFor="profile-email"><span>Email</span>
+              <input id="profile-email" value={profile.email} readOnly />
+            </label>
+            <label className="field" htmlFor="profile-phone"><span>Phone (optional)</span>
+              <input id="profile-phone" value={form.phone} type="tel" inputMode="tel" autoComplete="tel"
+                aria-invalid={Boolean(errors.phone)}
+                onChange={(event) => updateField("phone", event.target.value)}
+                onBlur={() => {
+                  setErrors(validate(form));
+                  setPhoneTouched(true);
+                }} />
+            </label>
+            {(submitted || errors.phone) && errors.phone && <small className="field-error">{errors.phone}</small>}
+            <div className="profile-actions">
+              <button className="button button-outline" type="button" disabled={busy} onClick={cancelEditing}>Cancel</button>
+              <button className="button button-primary" disabled={busy}>{busy ? "Saving…" : "Save Changes"}</button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <dl className="profile-details">
+              <div><dt>Name</dt><dd>{profile.displayName}</dd></div>
+              <div><dt>Email</dt><dd>{profile.email}</dd></div>
+              <div><dt>Phone</dt><dd>{profile.phone || "Not provided"}</dd></div>
+            </dl>
+            <div className="profile-actions">
+              <button className="button button-outline" onClick={startEditing}>Edit Profile</button>
+              <button className="button button-primary" onClick={onNavigateToAddresses}>Manage saved addresses</button>
+            </div>
+          </>
+        ) : <EmptyState title="Profile unavailable" text="Your profile could not be loaded. Try again in a moment." />}
+      </section>
+    </section>
   );
 }
 
@@ -308,7 +534,17 @@ function AddressesView({ api, busy, onRun, onNotify }: {
   };
   const openEditAddress = (address: Address) => {
     setEditing(address.id);
-    setForm({ ...address, line2: address.line2 ?? "" });
+    setForm({
+      label: address.label,
+      recipientName: address.recipientName,
+      line1: address.line1,
+      line2: address.line2 ?? "",
+      city: address.city,
+      region: address.region,
+      postalCode: address.postalCode,
+      countryCode: address.countryCode,
+      phone: address.phone,
+    });
     setValidationErrors({});
     setTouchedFields(new Set());
     setSubmitted(false);
@@ -334,12 +570,22 @@ function AddressesView({ api, busy, onRun, onNotify }: {
     const normalizedPhone = normalizeIndianPhone(form.phone);
     if (!normalizedPhone) return;
     saveInProgress.current = true;
-    const normalizedForm = { ...form, countryCode: "IN", phone: normalizedPhone };
+    const addressRequest: AddressInput = {
+      label: form.label.trim(),
+      recipientName: form.recipientName.trim(),
+      line1: form.line1.trim(),
+      line2: form.line2?.trim() ?? "",
+      city: form.city.trim(),
+      region: form.region.trim(),
+      postalCode: form.postalCode.trim(),
+      countryCode: "IN",
+      phone: normalizedPhone,
+    };
     const wasEditing = editing !== null;
     try {
       const result = await onRun(() => editing
-        ? api.updateAddress(editing, normalizedForm)
-        : api.createAddress(normalizedForm));
+        ? api.updateAddress(editing, addressRequest)
+        : api.createAddress(addressRequest));
       if (result) {
         closeDialog();
         if (await refresh()) onNotify(wasEditing ? "Address updated successfully." : "Address saved successfully.", "success");
@@ -444,7 +690,7 @@ function OrdersView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run 
               <span className="order-initial">✳</span>
               <span className="order-list-copy"><strong>Order {order.id.slice(-6).toUpperCase()}</strong><small>{formatDate(order.createdAt)} · {order.items.length} items</small></span>
               <span className="status-pill">{prettyStatus(order.status)}</span>
-              <strong>{formatMoney(order.total)}</strong>
+              <strong>{formatLegacyMoney(order.total, order.currency)}</strong>
             </button>
           ))}
           {totalPages > 1 && <div className="pagination"><button className="button button-outline button-small" disabled={page === 0 || loading} onClick={() => setPage((current) => current - 1)}>Previous</button><span>{page + 1} / {totalPages}</span><button className="button button-outline button-small" disabled={page + 1 >= totalPages || loading} onClick={() => setPage((current) => current + 1)}>Next</button></div>}
@@ -459,8 +705,9 @@ function OrdersView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run 
                   return <span className={active ? "progress-step complete" : "progress-step"} key={status}><i>{active ? "✓" : index + 1}</i><small>{prettyStatus(status)}</small></span>;
                 })}
               </div>
-              {selected.items.map((item) => <div className="detail-line" key={item.menuItemId}><span>{item.quantity} × {item.name}</span><strong>{formatMoney(item.lineTotal)}</strong></div>)}
-              <div className="order-total-lines"><span>Subtotal <b>{formatMoney(selected.subtotal)}</b></span><span>Delivery fee <b>{formatMoney(selected.deliveryFee)}</b></span><span className="total-line">Total <b>{formatMoney(selected.total)}</b></span></div>
+              {selected.items.map((item) => <div className="detail-line" key={item.menuItemId}><span>{item.quantity} × {item.name}</span><strong>{formatLegacyMoney(item.lineTotal, selected.currency)}</strong></div>)}
+              <div className="order-total-lines"><span>Subtotal <b>{formatLegacyMoney(selected.subtotal, selected.currency)}</b></span>{isPositiveMoney(selected.deliveryFee) && <span>Delivery fee <b>{formatLegacyMoney(selected.deliveryFee, selected.currency)}</b></span>}<span className="total-line">Total <b>{formatLegacyMoney(selected.total, selected.currency)}</b></span></div>
+              {selected.currency !== "INR" && <p className="inline-note">This is a legacy {selected.currency} order. Its stored amounts have not been converted.</p>}
               <div className="delivery-address-block"><span className="eyebrow">DELIVERY ADDRESS</span><p>{selected.deliveryAddress.recipientName}<br />{selected.deliveryAddress.line1}, {selected.deliveryAddress.city}, {selected.deliveryAddress.region} {selected.deliveryAddress.postalCode}</p></div>
               {selected.status === "CANCELLED" && <p className="inline-note">This order was cancelled{selected.cancellationReason ? `: ${selected.cancellationReason}` : ""}.</p>}
               {selected.deliveryProvisioningStatus !== "NOT_REQUESTED" && (
@@ -492,11 +739,10 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
   const [orderPages, setOrderPages] = useState(0);
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [editingMenuId, setEditingMenuId] = useState<string | null>(null);
-  const [restaurantForm, setRestaurantForm] = useState({
-    name: "", description: "", cuisines: "Comfort food",
-    line1: "", line2: "", city: "", region: "", postalCode: "", countryCode: "US",
-  });
-  const [itemForm, setItemForm] = useState({ name: "", description: "", category: "Main", price: "", currency: "USD", available: true });
+  const [restaurantForm, setRestaurantForm] = useState({ ...initialRestaurantForm });
+  const emptyItemForm = { name: "", description: "", category: "Main", price: "", currency: "INR", available: true };
+  const [itemForm, setItemForm] = useState({ ...emptyItemForm });
+  const [legacyPriceNeedsReentry, setLegacyPriceNeedsReentry] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const refreshOwnedRestaurants = useCallback(async () => {
     const result = await onRun(() => api.myRestaurants());
@@ -563,7 +809,7 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
   const saveMenuItem = async (event: FormEvent) => {
     event.preventDefault();
     if (!restaurantId) return;
-    const body = { ...itemForm, price: itemForm.price.trim() };
+    const body = { ...itemForm, currency: "INR", price: itemForm.price.trim() };
     const result = await onRun(() => editingMenuId
       ? api.updateMenuItem(editingMenuId, body)
       : api.createMenuItem(restaurantId, body));
@@ -572,7 +818,8 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
         ? existing.map((item) => item.id === result.id ? result : item)
         : [...existing, result]);
       setEditingMenuId(null);
-      setItemForm({ name: "", description: "", category: "Main", price: "", currency: "USD", available: true });
+      setItemForm({ ...emptyItemForm });
+      setLegacyPriceNeedsReentry(false);
     }
   };
   const editMenuItem = (item: MenuItem) => {
@@ -581,10 +828,11 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
       name: item.name,
       description: item.description ?? "",
       category: item.category,
-      price: item.price,
-      currency: item.currency,
+      price: item.currency === "INR" ? item.price : "",
+      currency: "INR",
       available: item.available,
     });
+    setLegacyPriceNeedsReentry(item.currency !== "INR");
   };
   const changeOrder = async (order: Order, status: string) => {
     const result = await onRun(() => api.updateRestaurantOrder(order.id, status, status === "REJECTED" ? rejectReason : undefined));
@@ -597,6 +845,12 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
     if (!restaurantId) return;
     const result = await onRun(() => api.menu(restaurantId));
     if (result) setMenu(result.items);
+  };
+  const startNewRestaurant = () => {
+    setRestaurantId("");
+    setRestaurant(null);
+    setMenu([]);
+    setRestaurantForm({ ...initialRestaurantForm });
   };
 
   return (
@@ -623,7 +877,7 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
       </div>
       <div className="workspace-grid owner-grid">
         <form className="surface-card form-card" onSubmit={(event) => void saveRestaurant(event)}>
-          <div className="section-heading compact-heading"><div><span className="eyebrow">{/^[a-fA-F0-9]{24}$/.test(restaurantId) ? "EDIT RESTAURANT" : "START A KITCHEN"}</span><h2>{restaurant?.name ?? "Restaurant profile"}</h2></div>{restaurant && <span className="status-pill">{prettyStatus(restaurant.status)}</span>}</div>
+          <div className="section-heading compact-heading"><div><span className="eyebrow">{/^[a-fA-F0-9]{24}$/.test(restaurantId) ? "EDIT RESTAURANT" : "START A KITCHEN"}</span><h2>{restaurant?.name ?? "Restaurant profile"}</h2></div><div className="form-actions">{restaurant && <span className="status-pill">{prettyStatus(restaurant.status)}</span>}{/^[a-fA-F0-9]{24}$/.test(restaurantId) && <button className="button button-outline button-small" type="button" onClick={startNewRestaurant}>Create another restaurant</button>}</div></div>
           <div className="form-grid">
             <Field label="Restaurant name" value={restaurantForm.name} onChange={(name) => setRestaurantForm({ ...restaurantForm, name })} required />
             <Field label="Cuisines · comma-separated" value={restaurantForm.cuisines} onChange={(cuisines) => setRestaurantForm({ ...restaurantForm, cuisines })} required />
@@ -643,14 +897,15 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
           <Field label="Description" value={itemForm.description} onChange={(description) => setItemForm({ ...itemForm, description })} />
           <div className="form-grid">
             <Field label="Category" value={itemForm.category} onChange={(category) => setItemForm({ ...itemForm, category })} required />
-            <Field label="Price · USD" value={itemForm.price} onChange={(price) => setItemForm({ ...itemForm, price })} required type="number" min="0" step="0.01" />
+            <Field label="Price · INR (₹)" value={itemForm.price} onChange={(price) => setItemForm({ ...itemForm, price })} required type="text" inputMode="decimal" pattern="(?:0|[1-9][0-9]*)(?:[.][0-9]{1,2})?" />
           </div>
           <label className="checkbox-field"><input type="checkbox" checked={itemForm.available} onChange={(event) => setItemForm({ ...itemForm, available: event.target.checked })} /> Available to order</label>
-          <div className="form-actions"><button className="button button-primary" disabled={busy || !restaurantId}>{editingMenuId ? "Save menu changes" : "Add to menu"}</button>{editingMenuId && <button className="button button-outline" type="button" onClick={() => { setEditingMenuId(null); setItemForm({ name: "", description: "", category: "Main", price: "", currency: "USD", available: true }); }}>Cancel</button>}</div>
+          {legacyPriceNeedsReentry && <p className="inline-note">This is a legacy USD menu item. Enter its intended INR price explicitly before saving; the previous amount was not converted.</p>}
+          <div className="form-actions"><button className="button button-primary" disabled={busy || !restaurantId || !itemForm.price.trim()}>{editingMenuId ? "Save menu changes" : "Add to menu"}</button>{editingMenuId && <button className="button button-outline" type="button" onClick={() => { setEditingMenuId(null); setItemForm({ ...emptyItemForm }); setLegacyPriceNeedsReentry(false); }}>Cancel</button>}</div>
           {!restaurantId && <small className="form-hint">Load or create a restaurant to manage its menu.</small>}
           <div className="menu-management">
             <div className="tracking-heading"><strong>Current menu</strong><button type="button" className="text-button" onClick={() => void refreshMenu()} disabled={!restaurantId}>Refresh</button></div>
-            {menu.map((item) => <div className="managed-item" key={item.id}><div><strong>{item.name}</strong><small>{formatMoney(item.price)} · {item.available ? "Available" : "Unavailable"}</small></div><div><button className="text-button" type="button" onClick={() => editMenuItem(item)}>Edit</button><button className="text-button" type="button" onClick={() => void onRun(async () => { const updated = await api.setMenuAvailability(item.id, !item.available); setMenu((items) => items.map((candidate) => candidate.id === item.id ? updated : candidate)); })}>{item.available ? "Pause" : "Publish"}</button></div></div>)}
+            {menu.map((item) => <div className="managed-item" key={item.id}><div><strong>{item.name}</strong><small>{formatLegacyMoney(item.price, item.currency)} · {item.available ? "Available" : "Unavailable"}</small></div><div><button className="text-button" type="button" onClick={() => editMenuItem(item)}>Edit</button><button className="text-button" type="button" onClick={() => void onRun(async () => { const updated = await api.setMenuAvailability(item.id, !item.available); setMenu((items) => items.map((candidate) => candidate.id === item.id ? updated : candidate)); })}>{item.available ? "Pause" : "Publish"}</button></div></div>)}
           </div>
         </form>
       </div>
@@ -659,7 +914,7 @@ function OwnerView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }
         {!restaurantId ? <EmptyState title="Load a restaurant to view orders" text="Order Service checks your ownership before returning anything." /> : orders.length === 0 ? <EmptyState title="No orders in the queue" text="New customer orders will appear here." /> : orders.map((order) => (
           <article className="owner-order-row" key={order.id}>
             <div className="owner-order-main"><strong>#{order.id.slice(-6).toUpperCase()} · {prettyStatus(order.status)}</strong><small>{formatDate(order.createdAt)} · {order.items.map((item) => `${item.quantity} × ${item.name}`).join(", ")}</small></div>
-            <strong>{formatMoney(order.total)}</strong>
+            <strong>{formatLegacyMoney(order.total, order.currency)}</strong>
             {order.status === "PLACED" && <div className="owner-order-actions"><button className="button button-primary button-small" disabled={busy} onClick={() => void changeOrder(order, "CONFIRMED")}>Accept</button><input aria-label="Rejection reason" placeholder="Reason to reject" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} /><button className="button button-outline button-small" disabled={busy || !rejectReason.trim()} onClick={() => void changeOrder(order, "REJECTED")}>Reject</button></div>}
             {order.status === "CONFIRMED" && <button className="button button-outline button-small" disabled={busy} onClick={() => void changeOrder(order, "PREPARING")}>Start preparing</button>}
             {order.status === "PREPARING" && <button className="button button-primary button-small" disabled={busy || order.deliveryProvisioningStatus !== "COMPLETE"} title={order.deliveryProvisioningStatus !== "COMPLETE" ? "Delivery provisioning must complete first" : ""} onClick={() => void changeOrder(order, "READY_FOR_PICKUP")}>Ready for pickup</button>}
@@ -760,24 +1015,183 @@ function DeliveryView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Ru
   );
 }
 
-function AdminView({ api, busy, onRun }: { api: Api; busy: boolean; onRun: Run }) {
+function AdminApprovalsView({ api, busy, onRun, onNotify }: {
+  api: Api;
+  busy: boolean;
+  onRun: Run;
+  onNotify: (message: string, kind: ToastKind) => void;
+}) {
+  const [restaurants, setRestaurants] = useState<AdminRestaurant[]>([]);
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const load = useCallback(async (targetPage = page) => {
+    setLoading(true);
+    setError("");
+    const result = await onRun(() => api.adminRestaurants("PENDING_APPROVAL", targetPage));
+    if (result) {
+      setRestaurants(result.items);
+      setPage(result.page);
+      setTotalPages(result.totalPages);
+    } else {
+      setError("Could not load pending restaurant approvals. Try again.");
+    }
+    setLoading(false);
+  }, [api, onRun, page]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const setApproval = async (restaurant: AdminRestaurant, status: "ACTIVE" | "REJECTED") => {
+    setUpdatingId(restaurant.id);
+    const result = await onRun(() => api.updateRestaurantApproval(restaurant.id, status));
+    setUpdatingId(null);
+    if (!result) return;
+    onNotify(`Restaurant ${status === "ACTIVE" ? "approved" : "rejected"}.`, "success");
+    await load(page);
+  };
+
+  return (
+    <section className="workspace">
+      <PageIntro eyebrow="PLATFORM OPERATIONS" title="Restaurant approvals" text="Review submitted restaurant profiles before they become available to customers." />
+      <div className="section-heading compact-heading">
+        <div><span className="eyebrow">PENDING APPROVAL</span><h2>Restaurants to review</h2></div>
+        <button className="button button-outline button-small" type="button" disabled={loading || busy} onClick={() => void load(page)}>Refresh</button>
+      </div>
+      {loading ? <Loading label="Loading pending restaurants" /> : error ? (
+        <div className="surface-card"><p role="alert">{error}</p><button className="button button-outline" type="button" onClick={() => void load(page)}>Try again</button></div>
+      ) : restaurants.length === 0 ? (
+        <div className="surface-card"><EmptyState title="No restaurants awaiting approval" text="New owner submissions will appear here." /></div>
+      ) : (
+        <div className="admin-record-list">
+          {restaurants.map((restaurant) => (
+            <article className="surface-card admin-record" key={restaurant.id}>
+              <div className="section-heading compact-heading">
+                <div><span className="eyebrow">{restaurant.status}</span><h2>{restaurant.name}</h2></div>
+                <span className="status-pill">{prettyStatus(restaurant.status)}</span>
+              </div>
+              <p>{restaurant.description || "No description provided."}</p>
+              <dl className="admin-record-fields">
+                <div><dt>Owner ID</dt><dd>{restaurant.ownerUserId}</dd></div>
+                <div><dt>Cuisines</dt><dd>{restaurant.cuisines.join(", ")}</dd></div>
+                <div><dt>Address</dt><dd>{[restaurant.address.line1, restaurant.address.line2, restaurant.address.city, restaurant.address.region, restaurant.address.postalCode, restaurant.address.countryCode].filter(Boolean).join(", ")}</dd></div>
+              </dl>
+              <div className="form-actions">
+                <button className="button button-primary" type="button" disabled={busy || updatingId !== null} onClick={() => void setApproval(restaurant, "ACTIVE")}>Approve</button>
+                <button className="button button-outline danger-button" type="button" disabled={busy || updatingId !== null} onClick={() => void setApproval(restaurant, "REJECTED")}>Reject</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {totalPages > 1 && <div className="pagination"><button className="button button-outline button-small" disabled={page === 0 || loading || busy} onClick={() => void load(page - 1)}>Previous</button><span>{page + 1} / {totalPages}</span><button className="button button-outline button-small" disabled={page + 1 >= totalPages || loading || busy} onClick={() => void load(page + 1)}>Next</button></div>}
+    </section>
+  );
+}
+
+function AdminView({ api, busy, onRun, onNotify }: {
+  api: Api;
+  busy: boolean;
+  onRun: Run;
+  onNotify: (message: string, kind: ToastKind) => void;
+}) {
   const [orderId, setOrderId] = useState("");
   const [reason, setReason] = useState("");
   const [result, setResult] = useState<Order | null>(null);
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalItems, setTotalItems] = useState(0);
+  const [search, setSearch] = useState("");
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState("");
+  const [selectedOrder, setSelectedOrder] = useState<AdminOrder | null>(null);
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryError, setDeliveryError] = useState("");
+
+  const loadOrders = useCallback(async (targetPage = page) => {
+    setListLoading(true);
+    setListError("");
+    const response = await onRun(() => api.adminOrders(targetPage));
+    if (response) {
+      setOrders(response.items);
+      setPage(response.page);
+      setTotalPages(response.totalPages);
+      setTotalItems(response.totalItems);
+    } else {
+      setListError("Could not load platform orders. Try again.");
+    }
+    setListLoading(false);
+  }, [api, onRun, page]);
+
+  useEffect(() => { void loadOrders(); }, [loadOrders]);
+
   const retry = async (event: FormEvent) => {
     event.preventDefault();
     const response = await onRun(() => api.retryProvisioning(orderId.trim()));
-    if (response) setResult(response);
+    if (response) {
+      setResult(response);
+      onNotify("Delivery provisioning retry completed.", "success");
+      await loadOrders(page);
+    }
   };
   const cancel = async () => {
     if (!reason.trim()) return;
     const response = await onRun(() => api.adminCancelOrder(orderId.trim(), reason.trim()));
-    if (response) setResult(response);
+    if (response) {
+      setResult(response);
+      onNotify("Order cancellation completed.", "success");
+      await loadOrders(page);
+    }
   };
+  const showDelivery = async (order: AdminOrder) => {
+    setSelectedOrder(order);
+    setDelivery(null);
+    setDeliveryError("");
+    const deliveryId = order.deliveryId;
+    if (!deliveryId) return;
+    setDeliveryLoading(true);
+    const response = await onRun(() => api.delivery(deliveryId));
+    if (response) setDelivery(response);
+    else setDeliveryError("Could not load the delivery details.");
+    setDeliveryLoading(false);
+  };
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleOrders = orders.filter((order) => [
+    order.id, order.customerId, order.restaurantId, order.status, order.deliveryProvisioningStatus,
+  ].some((value) => value.toLowerCase().includes(normalizedSearch)));
+
   return (
     <section className="workspace">
-      <PageIntro eyebrow="PLATFORM OPERATIONS" title="Order operations" text="Recover delivery provisioning or coordinate an eligible pre-pickup cancellation." />
+      <PageIntro eyebrow="PLATFORM OPERATIONS" title="Order operations" text="Review platform orders and recover delivery provisioning or coordinate an eligible pre-pickup cancellation." />
       <div className="notice-card"><strong>Admin access is enforced by each service.</strong><span>This screen exposes only the documented retry and coordinated cancellation APIs. It cannot grant roles; an administrator account must be provisioned outside public registration.</span></div>
+      <section className="surface-card admin-orders">
+        <div className="section-heading compact-heading"><div><span className="eyebrow">PLATFORM ORDERS</span><h2>{totalItems} total orders</h2></div><button className="button button-outline button-small" type="button" disabled={listLoading || busy} onClick={() => void loadOrders(page)}>Refresh</button></div>
+        <label className="field"><span>Search this page by order, customer, restaurant, or status</span><input value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+        {listLoading ? <Loading label="Loading platform orders" /> : listError ? (
+          <div><p role="alert">{listError}</p><button className="button button-outline" type="button" onClick={() => void loadOrders(page)}>Try again</button></div>
+        ) : visibleOrders.length === 0 ? (
+          <EmptyState title={orders.length ? "No matching orders" : "No platform orders yet"} text={orders.length ? "Change the search to see other orders on this page." : "Orders will appear here after customers check out."} />
+        ) : visibleOrders.map((order) => (
+          <article className="admin-order-row" key={order.id}>
+            <div><strong>Order {order.id}</strong><small>Customer {order.customerId} · Restaurant {order.restaurantId}</small><small>{formatDate(order.createdAt)} · Updated {formatDate(order.updatedAt)}</small></div>
+            <div><strong>{formatLegacyMoney(order.total, order.currency)}</strong><small>{prettyStatus(order.status)} · delivery {prettyStatus(order.deliveryProvisioningStatus)}</small></div>
+            <button className="text-button" type="button" onClick={() => void showDelivery(order)}>Details</button>
+          </article>
+        ))}
+        {selectedOrder && <div className="operation-result">
+          <span className="eyebrow">ORDER DETAILS</span>
+          <strong>Order {selectedOrder.id}</strong>
+          <span>{selectedOrder.items.map((item) => `${item.quantity} × ${item.name}`).join(", ") || "No item details returned"}</span>
+          <span>{formatLegacyMoney(selectedOrder.total, selectedOrder.currency)} · {prettyStatus(selectedOrder.status)} · {prettyStatus(selectedOrder.paymentStatus)}</span>
+          <span>Delivery provisioning: {prettyStatus(selectedOrder.deliveryProvisioningStatus)}{selectedOrder.deliveryId ? ` · ${selectedOrder.deliveryId}` : ""}</span>
+          {selectedOrder.deliveryId && (deliveryLoading ? <Loading label="Loading delivery status" /> : deliveryError ? <p role="alert">{deliveryError}</p> : delivery && <span>Delivery status: {prettyStatus(delivery.status)} · updated {formatDate(delivery.updatedAt)}</span>)}
+        </div>}
+        {totalPages > 1 && <div className="pagination"><button className="button button-outline button-small" disabled={page === 0 || listLoading || busy} onClick={() => void loadOrders(page - 1)}>Previous</button><span>{page + 1} / {totalPages}</span><button className="button button-outline button-small" disabled={page + 1 >= totalPages || listLoading || busy} onClick={() => void loadOrders(page + 1)}>Next</button></div>}
+      </section>
       <form className="surface-card admin-form" onSubmit={(event) => void retry(event)}>
         <div className="section-heading compact-heading"><div><span className="eyebrow">SAFE, IDEMPOTENT RECOVERY</span><h2>Resolve an order</h2></div></div>
         <label className="field"><span>Order ID</span><input value={orderId} onChange={(event) => setOrderId(event.target.value)} required pattern="[a-fA-F0-9]{24}" placeholder="24-character order ID" /></label>
@@ -891,6 +1305,8 @@ function Field({ label, value, onChange, ...props }: {
   maxLength?: number;
   min?: string;
   step?: string;
+  inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+  pattern?: string;
   "aria-invalid"?: boolean;
 }) {
   const id = useMemo(() => `field-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, [label]);
@@ -913,7 +1329,8 @@ function normalizeIndianPhone(phone: string): string | null {
   const match = /^(?:\+91[ -]?)?([6-9](?:[ -]?\d){9})$/.exec(phone.trim());
   if (!match) return null;
   const nationalDigits = match[1].replace(/[ -]/g, "");
-  return nationalDigits.length === 10 ? `+91${nationalDigits}` : null;
+  if (nationalDigits.length !== 10 || /^(\d)\1{9}$/.test(nationalDigits)) return null;
+  return `+91${nationalDigits}`;
 }
 
 function AddressFields({
@@ -1115,10 +1532,13 @@ function AppContent() {
         <a className="brand" href="#/restaurants" aria-label="FoodieExpress home"><span className="brand-mark">f</span><span>foodie<span className="brand-highlight">express</span></span></a>
         <nav className="main-nav" aria-label="Main navigation">
           <button className={view === "restaurants" ? "nav-link active" : "nav-link"} onClick={() => navigate("restaurants")}>Discover</button>
+          <button className={view === "cart" ? "nav-link cart-nav active" : "nav-link cart-nav"} aria-label={`Cart${cart.length ? `, ${cart.reduce((count, line) => count + line.quantity, 0)} items` : ""}`} onClick={() => navigate("cart")}><span aria-hidden="true">🛒</span> Cart{cart.length > 0 && <span className="cart-count" aria-label={`${cart.reduce((count, line) => count + line.quantity, 0)} items`}>{cart.reduce((count, line) => count + line.quantity, 0)}</span>}</button>
+          {customer && <button className={view === "profile" ? "nav-link active" : "nav-link"} onClick={() => navigate("profile")}>Profile</button>}
           {customer && <button className={view === "orders" ? "nav-link active" : "nav-link"} onClick={() => navigate("orders")}>Orders</button>}
           {customer && <button className={view === "addresses" ? "nav-link active" : "nav-link"} onClick={() => navigate("addresses")}>Addresses</button>}
           {owner && <button className={view === "owner" ? "nav-link active" : "nav-link"} onClick={() => navigate("owner")}>Restaurant studio</button>}
           {(operator || admin) && <button className={view === "delivery" ? "nav-link active" : "nav-link"} onClick={() => navigate("delivery")}>Delivery desk</button>}
+          {admin && <button className={view === "approvals" ? "nav-link active" : "nav-link"} onClick={() => navigate("approvals")}>Restaurant approvals</button>}
           {admin && <button className={view === "admin" ? "nav-link active" : "nav-link"} onClick={() => navigate("admin")}>Operations</button>}
         </nav>
         <div className="account-actions">
@@ -1131,19 +1551,25 @@ function AppContent() {
       {checkingSession ? <main className="page-shell"><Loading label="Restoring your secure session" /></main> : (
         <main className="page-shell">
           {view === "restaurants" && (
-            <DiscoveryView api={api} user={user} cart={cart} busy={busy} onRun={run}
-              onAdd={(item) => {
+            <DiscoveryView api={api} user={user} busy={busy} onRun={run}
+              onAdd={(item, restaurantName) => {
                 if (!customer) { setAuthMode(true); showToast("Sign in or create a customer account to add items to your cart.", "info"); return; }
                 if (cart.length && cart[0].restaurantId !== item.restaurantId) {
                   if (!window.confirm("Your cart has items from another restaurant. Clear it and start a new cart?")) return;
                   dispatch(clearCart()); checkoutIdentity.current = null;
                 }
-                dispatch(addItem(item)); showToast(`${item.name} added to your cart.`, "success");
+                dispatch(addItem({ item, restaurantName })); showToast(`${item.name} added to your cart.`, "success");
               }}
+            />
+          )}
+          {view === "cart" && (
+            <CartView api={api} user={customer ? user : null} cart={cart} busy={busy} onRun={run}
               onQuantity={(menuItemId, quantity) => dispatch(setQuantity({ menuItemId, quantity }))}
-              onClear={() => { dispatch(clearCart()); checkoutIdentity.current = null; }}
+              onRemove={(menuItemId) => dispatch(removeItem(menuItemId))}
+              onContinueShopping={() => navigate("restaurants")}
+              onSignIn={() => { setAuthMode(true); showToast("Sign in to continue to checkout.", "info"); }}
               onCheckout={async (addressId) => {
-                if (!cart.length) return;
+                if (!cart.length || cart.some((line) => line.currency !== "INR")) return;
                 const body = { restaurantId: cart[0].restaurantId, items: cart.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })), addressId };
                 const fingerprint = JSON.stringify(body);
                 if (!checkoutIdentity.current || checkoutIdentity.current.fingerprint !== fingerprint) checkoutIdentity.current = { fingerprint, key: crypto.randomUUID() };
@@ -1154,11 +1580,13 @@ function AppContent() {
                 }
               }} />
           )}
+          {view === "profile" && customer && <ProfileView api={api} busy={busy} onRun={run} onNotify={showToast} onNavigateToAddresses={() => navigate("addresses")} />}
           {view === "addresses" && customer && <AddressesView api={api} busy={busy} onRun={run} onNotify={showToast} />}
           {view === "orders" && customer && <OrdersView api={api} busy={busy} onRun={run} />}
           {view === "owner" && owner && <OwnerView api={api} busy={busy} onRun={run} />}
           {view === "delivery" && (operator || admin) && <DeliveryView api={api} busy={busy} onRun={run} />}
-          {view === "admin" && admin && <AdminView api={api} busy={busy} onRun={run} />}
+          {view === "approvals" && admin && <AdminApprovalsView api={api} busy={busy} onRun={run} onNotify={showToast} />}
+          {view === "admin" && admin && <AdminView api={api} busy={busy} onRun={run} onNotify={showToast} />}
         </main>
       )}
       <footer className="site-footer"><span className="footer-brand"><img src="/favicon.svg" alt="" />FoodieExpress</span><span>Online ordering · simulated payment · GPS tracking unavailable</span></footer>

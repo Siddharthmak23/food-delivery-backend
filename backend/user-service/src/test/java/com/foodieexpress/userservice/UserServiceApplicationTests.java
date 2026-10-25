@@ -5,12 +5,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
+import com.foodieexpress.userservice.dto.AddressRequest;
+import com.foodieexpress.userservice.exception.DuplicateAddressException;
+import com.foodieexpress.userservice.exception.ResourceNotFoundException;
+import com.foodieexpress.userservice.model.Address;
 import com.foodieexpress.userservice.model.User;
 import com.foodieexpress.userservice.model.UserRole;
 import com.foodieexpress.userservice.security.JwtService;
+import com.foodieexpress.userservice.service.AddressService;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSObject;
@@ -34,10 +45,12 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -51,6 +64,8 @@ import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 @AutoConfigureMockMvc
 class UserServiceApplicationTests {
 
+    private static final String TEST_USER_ID = "671000000000000000000001";
+    private static final String TEST_ADDRESS_ID = "671000000000000000000010";
     private static final String JWT_SECRET = generateTestSecret();
     private static final KeyPair ORDER_INTERNAL_KEY_PAIR = generateInternalKeyPair();
 
@@ -69,6 +84,9 @@ class UserServiceApplicationTests {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @MockitoBean
+    private AddressService addressService;
 
     @Autowired
     private CorsConfigurationSource corsConfigurationSource;
@@ -126,6 +144,135 @@ class UserServiceApplicationTests {
 
         assertEquals(400, result.getResponse().getStatus());
         assertTrue(result.getResponse().getContentAsString().contains("\"code\":\"MALFORMED_REQUEST\""));
+    }
+
+    @Test
+    void profileUpdateRequiresAuthenticationAndRejectsRestrictedFields() throws Exception {
+        MvcResult unauthenticated = mockMvc.perform(put("/api/users/me")
+                        .contentType("application/json")
+                        .content("""
+                                {"displayName":"Changed","phone":"9876543210"}
+                                """))
+                .andReturn();
+        assertEquals(401, unauthenticated.getResponse().getStatus());
+
+        MvcResult restrictedField = mockMvc.perform(put("/api/users/me")
+                        .header("Authorization", "Bearer " + jwtService.issue(testUser()).value())
+                        .contentType("application/json")
+                        .content("""
+                                {"displayName":"Changed","phone":"9876543210","roles":["ADMIN"]}
+                                """))
+                .andReturn();
+        assertEquals(400, restrictedField.getResponse().getStatus());
+        assertTrue(restrictedField.getResponse().getContentAsString().contains("\"code\":\"MALFORMED_REQUEST\""));
+    }
+
+    @Test
+    void profileUpdateRejectsInvalidIndianPhoneNumbersBeforeUpdatingTheUser() throws Exception {
+        String authorization = "Bearer " + jwtService.issue(testUser()).value();
+        for (String phone : List.of(
+                "333333333333", "3333333333", "1234567890", "987654321", "98765432101", "98765abc10")) {
+            MvcResult result = mockMvc.perform(put("/api/users/me")
+                            .header("Authorization", authorization)
+                            .contentType("application/json")
+                            .content("""
+                                    {"displayName":"Changed","phone":"%s"}
+                                    """.formatted(phone)))
+                    .andReturn();
+            assertEquals(400, result.getResponse().getStatus(), phone);
+            assertTrue(result.getResponse().getContentAsString().contains("valid Indian mobile number"), phone);
+        }
+    }
+
+    @Test
+    void addressCreateAndUpdateUseTheValidatedJsonContractAndReturnSavedValues() throws Exception {
+        String authorization = "Bearer " + jwtService.issue(testUser()).value();
+        AddressRequest createRequest = addressRequest("Mumbai");
+        AddressRequest updateRequest = addressRequest("Pune");
+        when(addressService.create(eq(TEST_USER_ID), eq(createRequest)))
+                .thenReturn(savedAddress(TEST_ADDRESS_ID, TEST_USER_ID, createRequest));
+        when(addressService.update(eq(TEST_USER_ID), eq(TEST_ADDRESS_ID), eq(updateRequest)))
+                .thenReturn(savedAddress(TEST_ADDRESS_ID, TEST_USER_ID, updateRequest));
+
+        MvcResult created = mockMvc.perform(post("/api/users/me/addresses")
+                        .header("Authorization", authorization)
+                        .contentType("application/json")
+                        .content(addressJson("Mumbai")))
+                .andReturn();
+        assertEquals(201, created.getResponse().getStatus());
+        assertTrue(created.getResponse().getContentAsString().contains("\"city\":\"Mumbai\""));
+        assertTrue(created.getResponse().getContentAsString().contains("\"phone\":\"+919876543210\""));
+
+        MvcResult updated = mockMvc.perform(put("/api/users/me/addresses/" + TEST_ADDRESS_ID)
+                        .header("Authorization", authorization)
+                        .contentType("application/json")
+                        .content(addressJson("Pune")))
+                .andReturn();
+        assertEquals(200, updated.getResponse().getStatus());
+        assertTrue(updated.getResponse().getContentAsString().contains("\"id\":\"" + TEST_ADDRESS_ID + "\""));
+        assertTrue(updated.getResponse().getContentAsString().contains("\"city\":\"Pune\""));
+        assertTrue(updated.getResponse().getContentAsString().contains("\"line2\":\"Apartment 3\""));
+        verify(addressService).create(TEST_USER_ID, createRequest);
+        verify(addressService).update(TEST_USER_ID, TEST_ADDRESS_ID, updateRequest);
+    }
+
+    @Test
+    void malformedOrInvalidAddressUpdatesReturnSafeBadRequestWithoutCallingService() throws Exception {
+        String authorization = "Bearer " + jwtService.issue(testUser()).value();
+        MvcResult malformed = mockMvc.perform(put("/api/users/me/addresses/" + TEST_ADDRESS_ID)
+                        .header("Authorization", authorization)
+                        .contentType("application/json")
+                        .content("{\"label\":"))
+                .andReturn();
+        assertEquals(400, malformed.getResponse().getStatus());
+        assertTrue(malformed.getResponse().getContentAsString().contains("\"code\":\"MALFORMED_REQUEST\""));
+        assertTrue(malformed.getResponse().getContentAsString()
+                .contains("Check the JSON fields and try again"));
+        assertFalse(malformed.getResponse().getContentAsString().contains("HttpMessageNotReadableException"));
+
+        MvcResult invalid = mockMvc.perform(put("/api/users/me/addresses/" + TEST_ADDRESS_ID)
+                        .header("Authorization", authorization)
+                        .contentType("application/json")
+                        .content("""
+                                {"label":"Home","recipientName":"Customer","line1":"10 Main Road",
+                                 "line2":null,"city":"Pune","region":"Maharashtra","postalCode":"411001",
+                                 "countryCode":"IN","phone":"9876543210","id":"671000000000000000000099"}
+                                """))
+                .andReturn();
+        assertEquals(400, invalid.getResponse().getStatus());
+        assertTrue(invalid.getResponse().getContentAsString().contains("\"code\":\"MALFORMED_REQUEST\""));
+        verifyNoInteractions(addressService);
+    }
+
+    @Test
+    void addressUpdateHidesOwnershipFailuresAsNotFound() throws Exception {
+        when(addressService.update(eq(TEST_USER_ID), eq(TEST_ADDRESS_ID), any(AddressRequest.class)))
+                .thenThrow(new ResourceNotFoundException());
+
+        MvcResult result = mockMvc.perform(put("/api/users/me/addresses/" + TEST_ADDRESS_ID)
+                        .header("Authorization", "Bearer " + jwtService.issue(testUser()).value())
+                        .contentType("application/json")
+                        .content(addressJson("Pune")))
+                .andReturn();
+
+        assertEquals(404, result.getResponse().getStatus());
+        assertFalse(result.getResponse().getContentAsString().contains("another user"));
+    }
+
+    @Test
+    void duplicateAddressConflictHasSafeActionableResponse() throws Exception {
+        when(addressService.create(eq(TEST_USER_ID), any(AddressRequest.class)))
+                .thenThrow(new DuplicateAddressException());
+
+        MvcResult result = mockMvc.perform(post("/api/users/me/addresses")
+                        .header("Authorization", "Bearer " + jwtService.issue(testUser()).value())
+                        .contentType("application/json")
+                        .content(addressJson("Ahmedabad")))
+                .andReturn();
+
+        assertEquals(409, result.getResponse().getStatus());
+        assertTrue(result.getResponse().getContentAsString().contains("\"code\":\"DUPLICATE_ADDRESS\""));
+        assertTrue(result.getResponse().getContentAsString().contains("This delivery address is already saved."));
     }
 
     @Test
@@ -206,6 +353,9 @@ class UserServiceApplicationTests {
                         .header("Authorization", "Bearer " + parts[0] + "." + parts[1] + ".AAAA"))
                 .andReturn().getResponse().getStatus());
 
+        when(addressService.getForCheckout(
+                "671000000000000000000001", "671000000000000000000010"))
+                .thenThrow(new DataAccessResourceFailureException("test data store unavailable"));
         MvcResult valid = mockMvc.perform(get(path)
                         .header("Authorization", "Bearer " + internalAddressToken("user:address:read")))
                 .andReturn();
@@ -229,6 +379,38 @@ class UserServiceApplicationTests {
         user.setId("671000000000000000000001");
         user.setRoles(Set.of(UserRole.CUSTOMER));
         return user;
+    }
+
+    private AddressRequest addressRequest(String city) {
+        return new AddressRequest(
+                "Home", "Customer", "10 Main Road", "Apartment 3", city,
+                "Maharashtra", "411001", "IN", "+91 98765-43210");
+    }
+
+    private String addressJson(String city) {
+        return """
+                {"label":"Home","recipientName":"Customer","line1":"10 Main Road",
+                 "line2":"Apartment 3","city":"%s","region":"Maharashtra","postalCode":"411001",
+                 "countryCode":"IN","phone":"+91 98765-43210"}
+                """.formatted(city);
+    }
+
+    private Address savedAddress(String id, String userId, AddressRequest request) {
+        Address address = new Address();
+        address.setId(id);
+        address.setUserId(userId);
+        address.setLabel(request.label());
+        address.setRecipientName(request.recipientName());
+        address.setLine1(request.line1());
+        address.setLine2(request.line2());
+        address.setCity(request.city());
+        address.setRegion(request.region());
+        address.setPostalCode(request.postalCode());
+        address.setCountryCode(request.countryCode());
+        address.setPhone("+919876543210");
+        address.setCreatedAt(Instant.now());
+        address.setUpdatedAt(Instant.now());
+        return address;
     }
 
     private String encodeHsToken(Instant issuedAt, Instant expiresAt, boolean includeRoles) {

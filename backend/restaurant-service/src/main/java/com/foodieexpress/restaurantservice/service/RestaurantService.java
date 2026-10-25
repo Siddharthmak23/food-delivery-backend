@@ -29,7 +29,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class RestaurantService {
 
-    private static final String CURRENCY = "USD";
+    private static final String CURRENCY = "INR";
     private final RestaurantRepository restaurantRepository;
     private final MenuItemRepository menuItemRepository;
     private final RestaurantQueryRepository queryRepository;
