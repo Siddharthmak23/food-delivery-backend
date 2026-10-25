@@ -15,5 +15,7 @@ public interface RestaurantRepository extends MongoRepository<Restaurant, String
 
     Page<Restaurant> findAllByOwnerUserId(String ownerUserId, Pageable pageable);
 
+    long countByOwnerUserId(String ownerUserId);
+
     Page<Restaurant> findAllByStatus(RestaurantStatus status, Pageable pageable);
 }

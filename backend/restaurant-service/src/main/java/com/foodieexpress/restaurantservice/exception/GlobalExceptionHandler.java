@@ -70,6 +70,11 @@ public class GlobalExceptionHandler {
         return response(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", exception.getMessage(), List.of());
     }
 
+    @ExceptionHandler(RestaurantConflictException.class)
+    public ResponseEntity<ApiError> handleRestaurantConflict(RestaurantConflictException exception) {
+        return response(HttpStatus.CONFLICT, "CONFLICT", exception.getMessage(), List.of());
+    }
+
     @ExceptionHandler(DuplicateKeyException.class)
     public ResponseEntity<ApiError> handleDuplicateKey() {
         return response(HttpStatus.CONFLICT, "CONFLICT", "The requested resource conflicts with existing data",

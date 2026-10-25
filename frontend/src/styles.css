@@ -289,6 +289,65 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-close { top: 12px; right: 12px; border-color: #e8e4da; color: var(--green); background: #fffefa; }
 .inline-note { color: #697b5f; font-size: 10px; line-height: 1.55; }
 
+.cart-empty-state { display: grid; gap: 20px; }
+.cart-page-card { padding: 24px; }
+.cart-page-layout { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(260px, .95fr); gap: 24px; align-items: start; }
+.cart-page-items { min-width: 0; }
+.cart-page-lines { display: grid; gap: 16px; margin-top: 12px; }
+.cart-page-line { display: grid; grid-template-columns: minmax(0, 1.6fr) auto minmax(92px, auto); align-items: center; gap: 18px; min-height: 92px; padding: 18px 16px; border: 1px solid #ece7df; border-radius: 12px; background: #fffdf9; }
+.cart-page-item { display: grid; gap: 6px; min-width: 0; }
+.cart-page-item strong { color: #1d2a20; font: 500 18px Georgia, serif; letter-spacing: -.32px; }
+.cart-page-item small { color: #7b7b72; font-size: 12px; }
+.cart-page-item span { color: #5d6f5a; font-size: 11px; font-weight: 600; }
+.cart-quantity-control { justify-content: flex-start; }
+.cart-page-line-total-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.cart-page-line-total { color: #273a2b; font-size: 17px; letter-spacing: -.2px; }
+.cart-remove { color: #9c4d40; font-size: 10px; }
+.cart-summary-panel { display: grid; gap: 14px; align-self: stretch; padding: 22px 20px; border: 1px solid #eae5dc; border-radius: 14px; background: #f7f4ee; }
+.cart-summary-panel h3 { margin: 0; font: 500 24px Georgia, serif; letter-spacing: -.5px; }
+.summary-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #495346; font-size: 13px; }
+.summary-row strong { color: #1f2b21; }
+.muted-row { color: #7a7e74; font-size: 12px; }
+.total-row { padding-top: 12px; border-top: 1px solid #e2ddd4; font-size: 15px; font-weight: 700; }
+.total-row strong { color: #1d2a20; }
+.summary-note { margin: 0; color: #7c7d73; font-size: 11px; line-height: 1.6; }
+.summary-alert { margin: 0; padding: 10px 12px; border-radius: 8px; color: #8f4034; background: #fbe7e1; font-size: 11px; line-height: 1.55; }
+.cart-page-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+.cart-page-actions .button { flex: 0 0 auto; }
+.cart-checkout-card { margin-top: 22px; padding: 24px; }
+.checkout-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(240px, .85fr); gap: 22px; align-items: start; }
+.checkout-main-panel, .checkout-side-panel { min-width: 0; }
+.checkout-main-panel h3, .checkout-side-panel h3 { margin: 0 0 12px; font: 500 22px Georgia, serif; letter-spacing: -.4px; }
+.checkout-inline-message { display: grid; gap: 14px; }
+.checkout-address { margin-top: 6px; }
+.checkout-address select { min-height: 46px; }
+.checkout-side-panel { display: grid; gap: 18px; padding: 20px; border: 1px solid #eae5dc; border-radius: 12px; background: #f8f5f0; }
+.checkout-total-block { display: grid; gap: 8px; }
+.checkout-total-block span { color: #6a6e66; font-size: 12px; }
+.checkout-total-block strong { font: 500 30px Georgia, serif; letter-spacing: -.6px; color: #1e2e22; }
+.checkout-buttons { justify-content: flex-start; margin-top: 0; }
+.checkout-buttons .button { min-width: 150px; }
+@media (max-width: 920px) {
+  .cart-page-layout, .checkout-layout { grid-template-columns: 1fr; }
+  .cart-summary-panel, .checkout-side-panel { margin-top: 0; }
+  .cart-page-line { grid-template-columns: minmax(0, 1fr) auto; }
+  .cart-page-line-total-wrap { grid-column: 1 / -1; justify-content: space-between; }
+  .cart-page-actions { justify-content: stretch; }
+  .cart-page-actions .button { flex: 1 1 180px; }
+}
+
+@media (max-width: 680px) {
+  .cart-page-card, .cart-checkout-card { padding: 18px 16px; }
+  .cart-page-line { grid-template-columns: 1fr; gap: 12px; padding: 16px 14px; }
+  .cart-page-item strong { font-size: 17px; }
+  .cart-page-line-total-wrap { justify-content: space-between; }
+  .summary-row { font-size: 12px; }
+  .total-row { font-size: 14px; }
+  .checkout-side-panel { padding: 16px; }
+  .checkout-buttons { display: grid; grid-template-columns: 1fr; }
+  .checkout-buttons .button { width: 100%; }
+}
+
 @media (max-width: 920px) {
   .topbar { gap: 14px; padding: 0 22px; }
   .main-nav { gap: 14px; }

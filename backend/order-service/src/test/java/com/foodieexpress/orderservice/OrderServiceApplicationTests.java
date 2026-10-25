@@ -146,6 +146,22 @@ class OrderServiceApplicationTests {
         assertEquals(401, mockMvc.perform(get("/api/orders/my-orders")).andReturn().getResponse().getStatus());
         assertEquals(401, mockMvc.perform(post("/api/orders")).andReturn().getResponse().getStatus());
 
+        assertEquals(403, mockMvc.perform(get("/api/orders/restaurant/672000000000000000000001")
+                        .header("Authorization", "Bearer " + tokenWithRole("CUSTOMER")))
+                .andReturn().getResponse().getStatus());
+
+        MvcResult ownerOrder = mockMvc.perform(post("/api/orders")
+                        .header("Authorization", "Bearer " + tokenWithRole("RESTAURANT_OWNER"))
+                        .header("Idempotency-Key", "owner-cannot-order")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"restaurantId":"672000000000000000000001",
+                                 "items":[{"menuItemId":"672000000000000000000010","quantity":1}],
+                                 "addressId":"671000000000000000000010"}
+                                """))
+                .andReturn();
+        assertEquals(403, ownerOrder.getResponse().getStatus());
+
         String body = """
                 {"restaurantId":"672000000000000000000001",
                  "items":[{"menuItemId":"672000000000000000000010","quantity":1,"price":"0.01"}],

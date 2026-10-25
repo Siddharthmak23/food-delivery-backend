@@ -54,6 +54,8 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login").permitAll()
+                        .requestMatchers("/api/users/me/addresses", "/api/users/me/addresses/**")
+                                .hasRole("CUSTOMER")
                         .anyRequest().authenticated());
         http.oauth2ResourceServer(resourceServer -> resourceServer
                 .jwt(jwt -> jwt

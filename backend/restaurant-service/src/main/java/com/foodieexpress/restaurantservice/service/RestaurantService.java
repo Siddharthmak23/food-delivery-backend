@@ -8,6 +8,7 @@ import com.foodieexpress.restaurantservice.dto.RestaurantAddressRequest;
 import com.foodieexpress.restaurantservice.dto.RestaurantRequest;
 import com.foodieexpress.restaurantservice.exception.InvalidRequestException;
 import com.foodieexpress.restaurantservice.exception.ResourceNotFoundException;
+import com.foodieexpress.restaurantservice.exception.RestaurantConflictException;
 import com.foodieexpress.restaurantservice.model.MenuItem;
 import com.foodieexpress.restaurantservice.model.Restaurant;
 import com.foodieexpress.restaurantservice.model.RestaurantAddress;
@@ -136,8 +137,13 @@ public class RestaurantService {
     }
 
     public Restaurant create(String ownerUserId, RestaurantRequest request) {
+        String normalizedOwnerId = normalizeId(ownerUserId);
+        if (restaurantRepository.countByOwnerUserId(normalizedOwnerId) > 0) {
+            throw new RestaurantConflictException(
+                    "This owner already has a restaurant. Each owner can create at most one kitchen.");
+        }
         Restaurant restaurant = new Restaurant();
-        restaurant.setOwnerUserId(normalizeId(ownerUserId));
+        restaurant.setOwnerUserId(normalizedOwnerId);
         restaurant.setStatus(RestaurantStatus.PENDING_APPROVAL);
         Instant now = Instant.now();
         restaurant.setCreatedAt(now);

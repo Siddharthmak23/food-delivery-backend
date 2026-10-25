@@ -136,7 +136,7 @@ describe("FoodieExpress UI", () => {
     expect(await screen.findByRole("heading", { name: "Your cart" })).toBeInTheDocument();
     expect(screen.getByText("Your cart is empty")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Proceed to Checkout" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Continue shopping" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start ordering" }));
     expect(window.location.hash).toBe("#/restaurants");
   });
 
@@ -144,7 +144,7 @@ describe("FoodieExpress UI", () => {
     const restaurant = restaurantRecord();
     const menuItem = menuItemRecord();
     const validOrder = {
-      id: "order-created",
+      id: "672000000000000000000099",
       customerId: customer.id,
       restaurantId: restaurant.id,
       items: [{ menuItemId: menuItem.id, name: menuItem.name, quantity: 1, unitPrice: "12.50", lineTotal: "12.50" }],
@@ -190,19 +190,21 @@ describe("FoodieExpress UI", () => {
     await signIn(customer);
     fireEvent.click(screen.getByRole("button", { name: /Saffron Kitchen/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Add +" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add +" }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Cart, 2 items" }));
-    expect(await screen.findByRole("heading", { name: "2 items" })).toBeInTheDocument();
-    expect(screen.getAllByText("₹25.00")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Add one Paneer Bowl" }));
-    expect(screen.getByRole("button", { name: "Cart, 3 items" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cart (2)" }));
+    expect(await screen.findByRole("heading", { name: "2 items" })).toBeInTheDocument();
+    expect(screen.getByText("Order Summary")).toBeInTheDocument();
+    expect(screen.getByText("Delivery fee")).toBeInTheDocument();
+    expect(screen.getAllByText("₹25.00").length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByRole("button", { name: "Add one Paneer Bowl" }));
+    expect(screen.getByRole("button", { name: "Cart (3)" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove one Paneer Bowl" }));
-    expect(screen.getByRole("button", { name: "Cart, 2 items" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cart (2)" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Your cart is empty")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue shopping" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start ordering" }));
     fireEvent.click(await screen.findByRole("button", { name: /Saffron Kitchen/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Add +" }));
     fireEvent.click(screen.getByRole("button", { name: /Cart/ }));
@@ -210,7 +212,10 @@ describe("FoodieExpress UI", () => {
     expect(await screen.findByRole("option", { name: /Home/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Place order" }));
 
-    expect(await screen.findByText(/Order placed/)).toBeInTheDocument();
+    const successToastText = await screen.findByText("Order placed successfully!");
+    const successToast = successToastText.closest('[role="status"]');
+    expect(successToast).toHaveTextContent("Order placed successfully!");
+    expect(successToast).not.toHaveTextContent(validOrder.id);
     const checkout = fetchMock.mock.calls.find(([url, init]) =>
       String(url).endsWith("/api/orders") && init?.method === "POST");
     expect(JSON.parse(String(checkout?.[1]?.body))).toEqual({
@@ -932,7 +937,7 @@ describe("FoodieExpress UI", () => {
     expect(screen.getByRole("button", { name: "Restaurant approvals" })).toBeInTheDocument();
   });
 
-  it("defaults new restaurant forms and reset forms to India", async () => {
+  it("defaults a new restaurant form to India and keeps the country code editable", async () => {
     const owner = { ...customer, roles: ["RESTAURANT_OWNER"] };
     const token = validAddressToken();
     vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
@@ -950,21 +955,127 @@ describe("FoodieExpress UI", () => {
     render(<Provider store={store}><App /></Provider>);
     await screen.findByText("No kitchens found");
     await signIn(owner);
-    fireEvent.click(screen.getByRole("button", { name: "Restaurant studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
+    expect(await screen.findByText("No restaurant is linked to this account yet.")).toBeInTheDocument();
 
     const countryCode = await screen.findByLabelText("Country code") as HTMLInputElement;
     expect(countryCode).toHaveValue("IN");
     fireEvent.change(countryCode, { target: { value: "US" } });
     expect(countryCode).toHaveValue("US");
 
-    fireEvent.change(screen.getByLabelText("Restaurant name"), { target: { value: "New Kitchen" } });
-    fireEvent.change(screen.getByLabelText("Street address"), { target: { value: "12 Green Park" } });
-    fireEvent.change(screen.getByLabelText("City"), { target: { value: "Ahmedabad" } });
-    fireEvent.change(screen.getByLabelText("Region / state"), { target: { value: "Gujarat" } });
-    fireEvent.change(screen.getByLabelText("Postal code"), { target: { value: "380001" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create restaurant" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Create another restaurant" }));
-    expect(screen.getByLabelText("Country code")).toHaveValue("IN");
+    expect(screen.getByRole("button", { name: "Create restaurant" })).toBeInTheDocument();
+  });
+
+  it("hides customer navigation for owners and automatically loads their single kitchen orders", async () => {
+    const owner = { ...customer, roles: ["RESTAURANT_OWNER"] };
+    const restaurant = restaurantRecord("672000000000000000000001");
+    const order = {
+      id: "672000000000000000000099",
+      restaurantId: restaurant.id,
+      customerId: customer.id,
+      items: [{ menuItemId: "672000000000000000000010", name: "Paneer Bowl", quantity: 1, unitPrice: "250.00", lineTotal: "250.00" }],
+      currency: "INR",
+      subtotal: "250.00",
+      deliveryFee: "0.00",
+      discount: "0.00",
+      total: "250.00",
+      status: "PLACED",
+      deliveryProvisioningStatus: "NOT_REQUESTED",
+      deliveryId: null,
+      createdAt: new Date().toISOString(),
+    };
+    let currentOrder = order;
+    const deliveredOrder = { ...order, id: "672000000000000000000098", status: "DELIVERED" };
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/restaurants?")) return Promise.resolve(response(page()));
+      if (url.endsWith("/api/auth/login")) return Promise.resolve(response({
+        accessToken: validAddressToken(),
+        tokenType: "Bearer",
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        user: owner,
+      }));
+      if (url.endsWith("/api/users/me")) return Promise.resolve(response(owner));
+      if (url.includes("/api/users/me/addresses")) return Promise.resolve(response(page()));
+      if (url.includes("/api/restaurants/my-restaurants?")) return Promise.resolve(response(page([restaurant])));
+      if (url.endsWith(`/api/restaurants/${restaurant.id}`)) return Promise.resolve(response(restaurant));
+      if (url.includes(`/api/restaurants/${restaurant.id}/menu`)) return Promise.resolve(response(page()));
+      if (url.endsWith(`/api/orders/${order.id}/restaurant-status`)) {
+        currentOrder = { ...currentOrder, status: "REJECTED" };
+        return Promise.resolve(response(currentOrder));
+      }
+      if (url.includes(`/api/orders/restaurant/${restaurant.id}?`)) return Promise.resolve(response(page([currentOrder, deliveredOrder])));
+      return Promise.resolve(response({ message: `Unexpected test request: ${url}` }, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Provider store={store}><App /></Provider>);
+    await screen.findByText("No kitchens found");
+    await signIn(owner);
+
+    expect(screen.queryByRole("button", { name: /^Cart/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Addresses" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Profile" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
+    expect(await screen.findByRole("button", { name: "Orders (1)" })).toBeInTheDocument();
+
+    expect(await screen.findByText(/Paneer Bowl/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/orders/restaurant/${restaurant.id}?`),
+      expect.anything(),
+    );
+    fireEvent.change(screen.getByLabelText("Rejection reason"), { target: { value: "Item unavailable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(await screen.findByRole("button", { name: "Orders" })).toBeInTheDocument();
+    const orderListRequests = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes(`/api/orders/restaurant/${restaurant.id}?`),
+    ).length;
+    fireEvent.click(screen.getByRole("button", { name: "Discover" }));
+    expect(await screen.findByRole("heading", { name: "Find your kind of flavor" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes(`/api/orders/restaurant/${restaurant.id}?`),
+    ).length).toBeGreaterThan(orderListRequests));
+    expect(await screen.findByText("No orders in the queue")).toBeInTheDocument();
+
+    window.location.hash = "#/cart";
+    await waitFor(() => expect(window.location.hash).toBe("#/restaurants"));
+    expect(screen.queryByRole("heading", { name: "Your cart" })).not.toBeInTheDocument();
+  });
+
+  it("requires an explicit kitchen choice when an owner has multiple restaurants", async () => {
+    const owner = { ...customer, roles: ["RESTAURANT_OWNER"] };
+    const restaurants = [
+      restaurantRecord("672000000000000000000001"),
+      { ...restaurantRecord("672000000000000000000002"), name: "Second Kitchen" },
+    ];
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/restaurants?")) return Promise.resolve(response(page()));
+      if (url.endsWith("/api/auth/login")) return Promise.resolve(response({
+        accessToken: validAddressToken(),
+        tokenType: "Bearer",
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        user: owner,
+      }));
+      if (url.endsWith("/api/users/me")) return Promise.resolve(response(owner));
+      if (url.includes("/api/users/me/addresses")) return Promise.resolve(response(page()));
+      if (url.includes("/api/restaurants/my-restaurants?")) return Promise.resolve(response(page(restaurants)));
+      return Promise.resolve(response({ message: `Unexpected test request: ${url}` }, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Provider store={store}><App /></Provider>);
+    await screen.findByText("No kitchens found");
+    await signIn(owner);
+    fireEvent.click(await screen.findByRole("button", { name: "Orders" }));
+
+    expect(await screen.findByText("Multiple restaurants are linked to this account.")).toBeInTheDocument();
+    expect(screen.getByText("Select a kitchen to view its orders")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Saffron Kitchen" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Second Kitchen" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create restaurant" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) =>
+      String(url).includes("/api/orders/restaurant/"),
+    )).toBe(false);
   });
 
   it("submits every new menu item in INR without exposing another currency choice", async () => {
@@ -994,7 +1105,7 @@ describe("FoodieExpress UI", () => {
     render(<Provider store={store}><App /></Provider>);
     await screen.findByText("No kitchens found");
     await signIn(owner);
-    fireEvent.click(screen.getByRole("button", { name: "Restaurant studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
     fireEvent.click(await screen.findByRole("button", { name: "Saffron Kitchen" }));
 
     expect(await screen.findByLabelText("Price · INR (₹)")).toBeInTheDocument();
@@ -1056,7 +1167,7 @@ describe("FoodieExpress UI", () => {
     render(<Provider store={store}><App /></Provider>);
     await screen.findByRole("button", { name: /Saffron Kitchen/ });
     await signIn(owner);
-    fireEvent.click(screen.getByRole("button", { name: "Restaurant studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
     fireEvent.click(await screen.findByRole("button", { name: "Saffron Kitchen" }));
     expect(await screen.findByText("Legacy USD $10.00 · Available")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -1086,9 +1197,9 @@ describe("FoodieExpress UI", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Saffron Kitchen/ }));
     expect(await screen.findByText("₹250.00")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add +" }));
-    fireEvent.click(screen.getByRole("button", { name: /Cart, 1 items/ }));
-    expect(await screen.findByText("₹250.00 each")).toBeInTheDocument();
-    expect(screen.getAllByText("₹250.00")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Cart (1)" }));
+    expect(await screen.findByText("₹250.00 per item")).toBeInTheDocument();
+    expect(screen.getAllByText("₹250.00").length).toBeGreaterThanOrEqual(2);
   });
 
   it("loads pending approvals and refreshes after a successful approval", async () => {

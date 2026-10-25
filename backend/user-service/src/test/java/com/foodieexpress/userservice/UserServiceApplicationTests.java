@@ -217,6 +217,26 @@ class UserServiceApplicationTests {
     }
 
     @Test
+    void savedAddressRoutesAreCustomerOnly() throws Exception {
+        User owner = testUser();
+        owner.setRoles(Set.of(UserRole.RESTAURANT_OWNER));
+        String authorization = "Bearer " + jwtService.issue(owner).value();
+
+        MvcResult list = mockMvc.perform(get("/api/users/me/addresses")
+                        .header("Authorization", authorization))
+                .andReturn();
+        MvcResult create = mockMvc.perform(post("/api/users/me/addresses")
+                        .header("Authorization", authorization)
+                        .contentType("application/json")
+                        .content(addressJson("Mumbai")))
+                .andReturn();
+
+        assertEquals(403, list.getResponse().getStatus());
+        assertEquals(403, create.getResponse().getStatus());
+        verifyNoInteractions(addressService);
+    }
+
+    @Test
     void malformedOrInvalidAddressUpdatesReturnSafeBadRequestWithoutCallingService() throws Exception {
         String authorization = "Bearer " + jwtService.issue(testUser()).value();
         MvcResult malformed = mockMvc.perform(put("/api/users/me/addresses/" + TEST_ADDRESS_ID)
